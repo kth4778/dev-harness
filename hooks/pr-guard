@@ -29,6 +29,12 @@ gh는 저장소 소유자 토큰으로 인증되어 있다. 이 명령을 실행
 
 # 봇 호출 토큰만 담긴 코멘트는 허용한다 — 리뷰가 아니라 명령이기 때문이다.
 # 토큰 외에 한 글자라도 섞이면 리뷰 내용으로 보고 막는다.
+#
+# 예외 하나: 언어 지시. 봇이 기본값으로 영어 리뷰를 쓰는데, 이 팀은 한국어로 읽는다.
+# 지시할 자리가 코멘트뿐이라(Codex는 AGENTS.md를 커밋 안 하는 이 저장소에서
+# 다른 설정 통로가 없다) 토큰 뒤 "한국어로"만 붙일 수 있게 연다.
+# 그 외의 글자는 여전히 리뷰 내용으로 보고 막는다 — 목록을 좁게 유지하는 것이
+# 이 가드의 전부다.
 is_bot_trigger() {
     local body
     body=$(printf '%s' "$flat" | sed -n 's/.*--body[= ]*"\([^"]*\)".*/\1/p')
@@ -37,6 +43,7 @@ is_bot_trigger() {
     body=$(printf '%s' "$body" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     case "$body" in
         "@codex review"|"@claude review") return 0 ;;
+        "@codex review 한국어로"|"@claude review 한국어로") return 0 ;;
         *) return 1 ;;
     esac
 }
