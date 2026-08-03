@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# PreToolUse(Bash) — 절대 규칙 10번을 강제한다.
+#
+# gh는 저장소 소유자 토큰으로 인증된다. 이 명령들을 실행하면 사용자가 자기 PR에
+# 리뷰를 단 것처럼 기록된다. 리뷰는 봇 2개(claudecode·codex)만 남겨야 한다.
+
+set -uo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib-input"
+
+read_hook_input
+cmd=$(json_field "tool_input.command")
+[ -z "$cmd" ] && exit 0
+
+# 한 줄로 눌러 개행을 이용한 우회를 막는다
+flat=$(printf '%s' "$cmd" | tr '\n' ' ')
+
+deny() {
+    block "차단됨 — 절대 규칙 10번: 사람 계정으로 PR에 리뷰·코멘트를 달지 않는다.
+
+막힌 명령: $1
+
+gh는 저장소 소유자 토큰으로 인증되어 있다. 이 명령을 실행하면 GitHub에
+사용자가 자기 PR에 리뷰를 단 것으로 기록된다. 리뷰는 claudecode·codex 봇
+2개만 남겨야 한다.
+
+지적할 내용이 있으면 채팅으로 보고한다. 코드를 고쳐야 하면 로컬에서 고치고
+한 라운드분을 모아 push 한 번으로 올린다."
+}
+
+# 봇 호출 토큰만 담긴 코멘트는 허용한다 — 리뷰가 아니라 명령이기 때문이다.
+# 토큰 외에 한 글자라도 섞이면 리뷰 내용으로 보고 막는다.
+is_bot_trigger() {
+    local body
+    body=$(printf '%s' "$flat" | sed -n 's/.*--body[= ]*"\([^"]*\)".*/\1/p')
+    [ -z "$body" ] && body=$(printf '%s' "$flat" | sed -n "s/.*-b[= ]*\"\([^\"]*\)\".*/\1/p")
+    [ -z "$body" ] && return 1   # 본문을 못 읽으면 막는다 (fail-closed)
+    body=$(printf '%s' "$body" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "$body" in
+        "@codex review"|"@claude review") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+case "$flat" in
+    *"gh pr review"*)      deny "gh pr review" ;;
+    *"gh issue comment"*)  deny "gh issue comment" ;;
+    *"gh pr edit"*--body*) deny "gh pr edit --body (리뷰 본문 수정)" ;;
+    *"gh pr comment"*)
+        if ! is_bot_trigger; then
+            deny "gh pr comment (봇 호출 토큰 외의 본문)"
+        fi
+        ;;
+esac
+
+# gh api로 우회하는 경로 — POST로 리뷰·코멘트를 만드는 호출만 막는다.
+# 조회(GET)는 봇 리뷰를 읽어야 하므로 허용한다.
+case "$flat" in
+    *"gh api"*)
+        case "$flat" in
+            *"/reviews"*|*"/comments"*)
+                case "$flat" in
+                    *"-X POST"*|*"--method POST"*|*"-f "*|*"--field"*|*"--input"*)
+                        deny "gh api로 리뷰·코멘트 생성"
+                        ;;
+                esac
+                ;;
+        esac
+        ;;
+esac
+
+exit 0

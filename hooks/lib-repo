@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# 저장소 모양을 훅이 스스로 알아낸다. 하드코딩을 지운 이유는 모노레포 전환에서
+# 전부 조용히 죽었기 때문이다 — 브랜치 이름이 develop이 아니고 gradlew가 루트에
+# 없자, 두 가드가 차단을 못 하고 그냥 통과시켰다. 거짓 차단보다 거짓 통과가 나쁘다.
+
+# 통합 브랜치 이름. origin/HEAD가 있으면 그것을, 없으면 develop·main 순으로 찾는다.
+default_branch() {
+    local b
+    b=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null) && {
+        printf '%s' "${b#origin/}"; return 0
+    }
+    for b in develop main master; do
+        git rev-parse --verify -q "origin/$b" >/dev/null 2>&1 && { printf '%s' "$b"; return 0; }
+        git rev-parse --verify -q "$b" >/dev/null 2>&1 && { printf '%s' "$b"; return 0; }
+    done
+    printf ''
+}
+
+# 빌드 루트 목록. 모노레포는 gradlew가 하위 폴더에 있다(services/gradlew).
+# 하나도 못 찾으면 빈 출력 — 호출부가 판정을 포기해야 한다.
+build_roots() {
+    local root="$1"
+    find "$root" -maxdepth 3 \
+        \( -name node_modules -o -name build -o -name .git -o -name target \) -prune -o \
+        \( -name gradlew -o -name pom.xml -o -name build.gradle -o -name build.gradle.kts \) -print 2>/dev/null |
+        while IFS= read -r f; do dirname "$f"; done | sort -u
+}
+
+# git 저장소 루트. 없으면 빈 출력.
+git_root() {
+    git rev-parse --show-toplevel 2>/dev/null || printf ''
+}
+
+# 사용자가 지정한 하네스 루트를 적어두는 파일. git 루트에 고정한다 —
+# 기준점을 찾는 파일이 기준점에 따라 움직이면 아무것도 못 찾는다.
+# `.harness/`는 이미 커밋 제외 대상이다.
+harness_root_file() {
+    local g; g=$(git_root)
+    [ -n "$g" ] && printf '%s' "$g/.harness/root"
+}
+
+# 지정된 하네스 루트의 절대 경로. 미지정이거나 가리키는 폴더가 없으면 빈 출력.
+configured_root() {
+    local f rel g; f=$(harness_root_file); g=$(git_root)
+    [ -z "$f" ] || [ ! -f "$f" ] && return 0
+    rel=$(head -n1 "$f" 2>/dev/null | tr -d '\r' | sed 's|^\./||; s|/$||')
+    [ -z "$rel" ] || [ "$rel" = "." ] && { printf '%s' "$g"; return 0; }
+    [ -d "$g/$rel" ] && printf '%s' "$g/$rel"
+}
+
+# 세션의 작업 폴더. 하네스 산출물(_workspace·.claude·_archive)의 기준점이다.
+# 훅마다 기준이 다르면(하나는 cwd, 하나는 git 루트) 만든 자리와 검사하는 자리가
+# 어긋나 가드가 아무것도 못 잡는다. 모노레포에서 실제로 그랬다.
+#
+# 우선순위: 사용자 지정(.harness/root) > CLAUDE_PROJECT_DIR > git 루트 > cwd.
+# 지정을 맨 앞에 두는 이유는, 모노레포에서 git 루트가 맞는 답인 경우가 드물기
+# 때문이다. 서버가 여럿이면 어느 서버의 세션인지는 사람만 안다.
+project_dir() {
+    local c; c=$(configured_root)
+    if [ -n "$c" ]; then printf '%s' "$c"; return 0; fi
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then printf '%s' "$CLAUDE_PROJECT_DIR"; return 0; fi
+    git rev-parse --show-toplevel 2>/dev/null || pwd
+}

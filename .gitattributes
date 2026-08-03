@@ -1,0 +1,10 @@
+# 훅 스크립트는 LF 고정 (bash가 파싱한다)
+hooks/session-start text eol=lf
+*.sh text eol=lf
+
+# 폴리글롯 래퍼도 LF 고정 (cmd와 bash가 둘 다 파싱한다)
+*.cmd text eol=lf
+
+*.md text eol=lf
+*.json text eol=lf
+*.js text eol=lf

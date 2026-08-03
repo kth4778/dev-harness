@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# SessionStart 훅 — 절대 규칙과 워크플로우를 세션에 주입한다.
+#
+# 이 훅이 이 플러그인의 발동 장치다. 스킬 파일은 디스크에 있어도 스스로
+# 발동하지 않는다. 세션마다 부트스트랩을 밀어넣어야 워크플로우가 작동한다.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# 프로젝트 디렉토리. 사용자 지정(.harness/root)이 최우선이다.
+source "${SCRIPT_DIR}/lib-repo"
+PROJECT_DIR="$(project_dir)"
+GIT_ROOT="$(git_root)"
+
+# ── 하네스 루트 확정 여부 ────────────────────────────────────────
+# 모노레포에서 이걸 안 물으면 산출물이 git 루트에 쌓인다. 세션을 services/clip
+# 에서 열어도 훅은 git 루트를 보므로, 만든 자리와 검사하는 자리가 어긋난다.
+# 실제로 그 실수가 났다.
+if [ -n "$(configured_root)" ]; then
+    rel="${PROJECT_DIR#"$GIT_ROOT"/}"
+    [ "$PROJECT_DIR" = "$GIT_ROOT" ] && rel="(저장소 루트)"
+    root_state="확정됨 → ${rel}
+하네스 산출물(_workspace · .claude · _archive)은 전부 여기 기준이다.
+바꾸려면 ${GIT_ROOT}/.harness/root 의 한 줄을 고친다."
+else
+    cands=$(build_roots "${GIT_ROOT:-.}" | while IFS= read -r d; do
+        printf '  - %s\n' "${d#"$GIT_ROOT"/}"
+    done)
+    [ -z "$cands" ] && cands="  (빌드 루트를 못 찾았다. 저장소 루트를 쓸지 물어라)"
+    root_state="⛔ 미확정 — 기능 개발을 시작하기 전에 반드시 확정한다.
+
+**사용자에게 먼저 묻는다. 임의로 정하지 않는다.**
+
+> 하네스 산출물(_workspace · .claude · _archive)을 어느 폴더 기준으로 둘까요?
+> 후보:
+${cands}
+>   - . (저장소 루트)
+
+답을 받으면 저장소 루트 기준 상대 경로 한 줄을 아래 파일에 적는다.
+저장소 루트면 점 하나(.)를 적는다.
+
+  경로: ${GIT_ROOT}/.harness/root
+  예:   services/clip
+
+적은 뒤 그 폴더에 .claude/agents · .claude/skills · _archive 가 없으면 만든다.
+이 파일이 생기기 전까지는 Phase 1로 넘어가지 않는다."
+fi
+
+read_or_empty() {
+    [ -f "$1" ] && cat "$1" 2>/dev/null || printf ''
+}
+
+rules=$(read_or_empty "${PLUGIN_ROOT}/RULES.md")
+bootstrap=$(read_or_empty "${PLUGIN_ROOT}/skills/bootstrap/SKILL.md")
+
+# 2층 CLAUDE.md — 브랜치 전략이 여기 있다. 없으면 개발 시작 전에 만들어야 한다.
+project_md=$(read_or_empty "${PROJECT_DIR}/CLAUDE.md")
+if [ -z "$project_md" ]; then
+    project_md="(없음) — 2층 CLAUDE.md가 없다. 브랜치 전략을 모르므로 절대 규칙 1번을
+지킬 수 없다. 기능 개발을 시작하기 전에 사용자에게 스택·브랜치 전략·모듈 구성을
+물어 CLAUDE.md를 만든다. 템플릿: ${PLUGIN_ROOT}/templates/CLAUDE-project.md"
+fi
+
+# [3] 자리가 비어 있는지 — 지난 세션이 마감됐는지 판정한다.
+session_state="깨끗함. 새 기능을 시작할 수 있다."
+leftovers=""
+[ -d "${PROJECT_DIR}/_workspace" ] && leftovers="${leftovers} _workspace/"
+[ -n "$(ls -A "${PROJECT_DIR}/.claude/agents" 2>/dev/null)" ] && leftovers="${leftovers} .claude/agents/"
+if [ -n "$leftovers" ]; then
+    session_state="지난 세션이 마감되지 않았다. 남아 있는 [3] 자리:${leftovers}
+새 기능을 시작하기 전에 wrap 스킬로 마감하거나, 중단된 작업을 이어서 진행한다."
+fi
+
+# JSON 이스케이프. 외부 도구(jq 등)에 의존하지 않는다 —
+# 훅은 로그인 셸 PATH 없이 실행되므로 PATH 의존 도구를 쓸 수 없다.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+context="<EXTREMELY_IMPORTANT>
+이 프로젝트는 개발 하네스를 따른다. 아래 세 가지가 이 세션의 전제다.
+
+═══ 절대 규칙 10개 ═══
+
+$(printf '%s' "$rules")
+
+═══ 워크플로우 (bootstrap 스킬 전문) ═══
+
+$(printf '%s' "$bootstrap")
+
+═══ 이 프로젝트 (2층 CLAUDE.md) ═══
+
+$(printf '%s' "$project_md")
+
+═══ 하네스 루트 ═══
+
+${root_state}
+
+═══ 세션 상태 ═══
+
+${session_state}
+</EXTREMELY_IMPORTANT>"
+
+escaped=$(escape_for_json "$context")
+
+printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$escaped"
+
+exit 0

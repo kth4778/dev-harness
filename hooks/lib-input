@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# 훅 공통 — stdin의 JSON에서 필드를 꺼낸다.
+#
+# jq에 의존하지 않는다. 훅은 로그인 셸 PATH 없이 실행되므로 PATH에 있으리라
+# 보장할 수 없다. node가 있으면 node로 정확히 파싱하고, 없으면 sed로 근사한다.
+
+HOOK_INPUT=""
+read_hook_input() {
+    HOOK_INPUT=$(cat)
+}
+
+# 사용법: json_field "tool_input.command"
+json_field() {
+    local path="$1"
+    if command -v node >/dev/null 2>&1; then
+        printf '%s' "$HOOK_INPUT" | node -e '
+            let raw = "";
+            process.stdin.on("data", d => raw += d);
+            process.stdin.on("end", () => {
+                try {
+                    let v = JSON.parse(raw);
+                    for (const k of process.argv[1].split(".")) {
+                        if (v == null) break;
+                        v = v[k];
+                    }
+                    process.stdout.write(v == null ? "" : String(v));
+                } catch (e) { process.stdout.write(""); }
+            });
+        ' "$path" 2>/dev/null
+    else
+        # 폴백: 마지막 키만 보고 sed로 뽑는다. 이스케이프가 섞이면 부정확할 수 있어
+        # 판정이 애매하면 통과시킨다 (거짓 차단보다 거짓 통과가 안전하다)
+        local key="${path##*.}"
+        printf '%s' "$HOOK_INPUT" \
+            | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" \
+            | head -1
+    fi
+}
+
+# 도구 실행을 막는다. exit 2 + stderr가 PreToolUse의 차단 규약이다.
+block() {
+    printf '%s\n' "$1" >&2
+    exit 2
+}

@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# PreToolUse(Bash) — 절대 규칙 1·2·9번을 강제한다.
+#
+# 1. 보호 브랜치 직접 커밋 차단
+# 2. 테스트를 돌리지 않은 커밋 차단
+# 9. AI 산출물이 섞인 커밋 차단
+
+set -uo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib-input"
+
+read_hook_input
+cmd=$(json_field "tool_input.command")
+[ -z "$cmd" ] && exit 0
+
+flat=$(printf '%s' "$cmd" | tr '\n' ' ')
+case "$flat" in
+    *"git commit"*) ;;
+    *) exit 0 ;;
+esac
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+
+# ── 규칙 1: 보호 브랜치 ──────────────────────────────────────────
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+case "$branch" in
+    main|master|develop)
+        block "차단됨 — 절대 규칙 1번: 보호 브랜치에 직접 커밋할 수 없다.
+
+현재 브랜치: $branch
+
+feature 브랜치를 만들고 거기서 작업한다:
+    git switch -c feature/<기능이름>"
+        ;;
+esac
+
+# ── 규칙 9: AI 산출물 ────────────────────────────────────────────
+staged=$(git diff --cached --name-only 2>/dev/null)
+if [ -n "$staged" ]; then
+    offenders=$(printf '%s\n' "$staged" \
+        | grep -E '(^|/)(\.claude/|_workspace/|_archive/|CLAUDE\.md$|AGENTS\.md$)' || true)
+    if [ -n "$offenders" ]; then
+        block "차단됨 — 절대 규칙 9번: AI 산출물은 GitHub에 올리지 않는다.
+
+스테이지에 올라온 파일:
+$offenders
+
+.gitignore에 다음을 추가하고 스테이지에서 내린다:
+    .claude/
+    _workspace/
+    _archive/
+    CLAUDE.md
+    **/CLAUDE.md
+
+    git restore --staged <파일>"
+    fi
+fi
+
+# ── 규칙 2: 테스트를 마친 상태인가 ───────────────────────────────
+# 자바/Gradle·Maven 프로젝트에서만 판정한다. 빌드 도구를 모르면 판정을 포기한다
+# (거짓 차단보다 거짓 통과가 안전하다).
+root=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -z "$root" ] && exit 0
+
+# 모노레포는 빌드 루트가 저장소 루트가 아니다(services/gradlew). 루트만 보면
+# 이 검사가 통째로 스킵돼 테스트 없이 커밋해도 조용히 통과한다.
+source "$(cd "$(dirname "$0")" && pwd)/lib-repo"
+[ -z "$(build_roots "$root")" ] && exit 0
+
+staged_src=$(printf '%s\n' "$staged" | grep -E '\.(java|kt|kts|sql)$' || true)
+[ -z "$staged_src" ] && exit 0   # 소스가 없는 커밋(문서 등)은 검사하지 않는다
+
+newest_mtime() {
+    local newest=0 t
+    while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        t=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+        [ "$t" -gt "$newest" ] && newest=$t
+    done
+    printf '%s' "$newest"
+}
+
+src_time=$(printf '%s\n' "$staged_src" | sed "s|^|$root/|" | newest_mtime)
+
+# 테스트 실행 흔적: Gradle은 build/test-results/, Maven은 target/surefire-reports/
+results=$(find "$root" -type d \( -path '*/build/test-results' -o -path '*/target/surefire-reports' \) 2>/dev/null)
+if [ -z "$results" ]; then
+    block "차단됨 — 절대 규칙 2번: 커밋은 테스트를 마친 상태에서만 남긴다.
+
+테스트를 실행한 흔적이 없다 (build/test-results 없음).
+
+테스트를 돌리고 통과를 확인한 뒤 커밋한다:
+    ./gradlew test"
+fi
+
+test_time=$(find $results -type f -name '*.xml' 2>/dev/null | newest_mtime)
+
+if [ "$src_time" -gt "$test_time" ]; then
+    block "차단됨 — 절대 규칙 2번: 커밋은 테스트를 마친 상태에서만 남긴다.
+
+마지막 테스트 실행 이후에 소스가 바뀌었다. 지금 커밋하면 검증되지 않은
+코드가 히스토리에 남는다.
+
+테스트를 다시 돌리고 통과를 확인한 뒤 커밋한다:
+    ./gradlew test
+
+변경된 소스:
+$(printf '%s\n' "$staged_src" | sed 's/^/    /')"
+fi
+
+exit 0
