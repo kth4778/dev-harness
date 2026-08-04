@@ -88,7 +88,7 @@ grep -nE '\.claude/|_workspace/|_archive/|CLAUDE\.md' _workspace/pr-body.md
 
 ## 3. 봇 리뷰 대응
 
-→ [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙 (push 라운드·수용 판단·답글 금지)
+→ [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙 (push 라운드·수용 판단·답글 금지·**머지 뒤 지적의 심각도 판정과 후속 브랜치**)
 
 ## 4. GitHub의 "Commit suggestion" 버튼을 쓰지 않는다
 
