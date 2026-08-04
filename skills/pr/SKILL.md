@@ -88,7 +88,7 @@ grep -nE '\.claude/|_workspace/|_archive/|CLAUDE\.md' _workspace/pr-body.md
 
 ## 3. 봇 리뷰 대응
 
-→ [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙 (push 라운드·수용 판단·답글 금지)
+→ [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙 (push 라운드·수용 판단·답글 금지·**머지 뒤 지적의 심각도 판정과 후속 브랜치**)
 
 ## 4. GitHub의 "Commit suggestion" 버튼을 쓰지 않는다
 
@@ -108,7 +108,15 @@ git switch "$BASE" && git pull
 git branch -d feature/{이름}
 ```
 
+## 6. 지식 위키 반영
+
+→ [`references/wiki-sync.md`](references/wiki-sync.md) — 코드 저장소 밖의 팀 지식
+정본을 맞춘다 (`.harness/wiki`로 찾고, 없으면 건너뛴다)
+
+**규칙 6-2가 여기까지 닿지 않는다.** 위키는 다른 저장소라 코드와 같은 PR에
+담을 수 없어, 코드만 머지되고 정본은 옛 사실을 말하는 상태가 남는다.
+
 ## 다음
 
-머지되면 `retro` 스킬로 간다. 회고 없이 마감하면 이번에 저지른 실수가
-다음 세션에서 그대로 반복된다.
+코드 PR이 머지되고 위키 반영까지 끝나면 `retro` 스킬로 간다. 회고 없이
+마감하면 이번에 저지른 실수가 다음 세션에서 그대로 반복된다.
