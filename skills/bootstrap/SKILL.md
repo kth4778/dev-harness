@@ -47,19 +47,8 @@ Phase 5는 기계 판정이 전부 PASS여야 넘어간다.
 | **[2]** | 공통 — 세션을 넘어 유지 | `CLAUDE.md`(3층 전부), `_archive/` | **절대 비우지 않는다** |
 | **[3]** | 세션마다 교체 | `.claude/agents/`, `.claude/skills/`, `_workspace/` | 아카이브로 옮기고 **비운다** |
 
-세션 마감(Phase 7)은 [3]을 `_archive/{날짜}-{기능}/`으로 옮기고 자리를 비운다.
-[2]는 건드리지 않는다 — 프로젝트의 영구 자산이다.
-
-```
-<repo>/
-├── [1] src/ · build.gradle · README.md · .github/
-├── [2] CLAUDE.md              프로젝트 시스템 프롬프트
-├── [2] <모듈>/CLAUDE.md        모듈 시스템 프롬프트
-├── [2] _archive/{날짜}-{기능}/  지난 세션 기록 (agents · skills · workspace)
-├── [3] .claude/agents/        이번 기능의 에이전트 정의
-├── [3] .claude/skills/        이번 기능의 오케스트레이터
-└── [3] _workspace/            이번 기능의 산출물
-```
+세션 마감(Phase 8)은 [3]을 `_archive/{날짜}-{기능}/`으로 옮기고 자리를 비운다.
+[2]는 건드리지 않는다 — 프로젝트의 영구 자산이다. 상세 절차는 `wrap` 스킬에 있다.
 
 `_workspace/` 파일명은 `{순번}_{에이전트}_{산출물}.md` 형식을 쓴다.
 예: `01_plan-critic_findings.md`

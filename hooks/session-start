@@ -52,15 +52,45 @@ read_or_empty() {
     [ -f "$1" ] && cat "$1" 2>/dev/null || printf ''
 }
 
-rules=$(read_or_empty "${PLUGIN_ROOT}/RULES.md")
+# 규칙은 제목 10줄만 주입한다. 전문은 필요할 때 읽는다 — 조문이 실제로
+# 필요한 자리는 inspect의 판정 한 번인데, 그 6KB를 매 세션 밀어넣고 있었다.
+#
+# 제목 추출에 실패하면(형식이 바뀌었거나 파일이 없으면) 전문으로 되돌린다.
+# 규칙이 조용히 사라지는 것보다 길게 들어가는 편이 안전하다.
+rules=$(grep -E '^## [0-9]+\.' "${PLUGIN_ROOT}/RULES.md" 2>/dev/null | sed 's/^## /  /')
+if [ "$(printf '%s\n' "$rules" | grep -c .)" -lt 10 ]; then
+    rules=$(read_or_empty "${PLUGIN_ROOT}/RULES.md")
+    rules_note="(제목 추출 실패 — 전문을 넣었다)"
+else
+    rules_note="전문: ${PLUGIN_ROOT}/RULES.md
+제목만으로 판단이 서지 않으면 **반드시 연다.** 특히 inspect의 10개 판정,
+그리고 '이건 규칙 몇 번에 걸리나'를 따질 때."
+fi
+
 bootstrap=$(read_or_empty "${PLUGIN_ROOT}/skills/bootstrap/SKILL.md")
 
 # 2층 CLAUDE.md — 브랜치 전략이 여기 있다. 없으면 개발 시작 전에 만들어야 한다.
-project_md=$(read_or_empty "${PROJECT_DIR}/CLAUDE.md")
+#
+# 저장소 루트에서 읽는다. PROJECT_DIR(하네스 루트)에서 읽으면 안 된다 —
+# 하네스 루트가 모듈이면 그 자리의 CLAUDE.md는 3층이고, 브랜치 전략이 없다.
+# 그러면 "2층"이라는 이름표를 달고 3층이 들어가면서 규칙 1의 근거가 통째로
+# 빠진다. 실제로 그 상태였다.
+project_md=$(read_or_empty "${GIT_ROOT}/CLAUDE.md")
 if [ -z "$project_md" ]; then
     project_md="(없음) — 2층 CLAUDE.md가 없다. 브랜치 전략을 모르므로 절대 규칙 1번을
 지킬 수 없다. 기능 개발을 시작하기 전에 사용자에게 스택·브랜치 전략·모듈 구성을
 물어 CLAUDE.md를 만든다. 템플릿: ${PLUGIN_ROOT}/templates/CLAUDE-project.md"
+fi
+
+# 3층 CLAUDE.md — 전문을 넣지 않고 자리만 알려준다.
+# 모듈 문서는 도메인 사실·함정이 쌓여 수천 줄이 된다. 매 세션 통째로 밀어넣으면
+# 정작 이번 작업에 필요한 한두 절이 그 안에 묻힌다. 코드를 건드리기 전에 읽는다.
+if [ "$PROJECT_DIR" != "$GIT_ROOT" ] && [ -f "${PROJECT_DIR}/CLAUDE.md" ]; then
+    module_md="${PROJECT_DIR}/CLAUDE.md ($(wc -c < "${PROJECT_DIR}/CLAUDE.md" | tr -d ' ')바이트)
+이 모듈의 도메인 사실·함정·알려진 구멍이 전부 여기 있다.
+**이 모듈의 코드를 건드리기 전에 읽는다.** 안 읽고 짜면 이미 기록된 함정을 다시 밟는다."
+else
+    module_md="(하네스 루트가 저장소 루트다. 3층 없음)"
 fi
 
 # [3] 자리가 비어 있는지 — 지난 세션이 마감됐는지 판정한다.
@@ -92,6 +122,8 @@ context="<EXTREMELY_IMPORTANT>
 
 $(printf '%s' "$rules")
 
+${rules_note}
+
 ═══ 워크플로우 (bootstrap 스킬 전문) ═══
 
 $(printf '%s' "$bootstrap")
@@ -99,6 +131,10 @@ $(printf '%s' "$bootstrap")
 ═══ 이 프로젝트 (2층 CLAUDE.md) ═══
 
 $(printf '%s' "$project_md")
+
+═══ 이 모듈 (3층 CLAUDE.md) ═══
+
+${module_md}
 
 ═══ 하네스 루트 ═══
 
