@@ -31,19 +31,31 @@
 최신이 아니다 — 그 파일은 커밋되지 않아 팀원에게 도달하지 않는다.
 규칙 6-2가 이것이다.
 
-## 훅 5개 — 규칙을 문장이 아니라 장치로
+## 훅 4개 — 되돌릴 수 없는 것만 막는다
 
 | 훅 | 이벤트 | 막는 것 |
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 10개 + 워크플로우 + 2층 CLAUDE.md 주입 |
 | `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
-| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · 테스트 미완료 커밋(2) · AI 파일 커밋(9) |
+| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
-| `session-end-guard` | Stop | PR 머지됐는데 마감 안 한 채 턴 종료 |
 
-`commit-guard`의 테스트 검사는 기계적이다 — 스테이지된 소스의 수정 시각이
-마지막 테스트 결과(`build/test-results`)보다 최신이면 차단한다. Gradle·Maven
-프로젝트에서만 판정하고, 빌드 도구를 모르면 판정을 포기한다.
+**기준은 "되돌릴 수 있나"다.** public 저장소에 한 번 올라간 시크릿과 보호
+브랜치 커밋은 지워도 히스토리에 남고, 나간 PR 코멘트는 지워도 알림이 이미
+갔다. 이런 것만 기계가 막는다.
+
+되돌릴 수 있는 실수는 훅으로 막지 않는다. 추측으로 막다 보면 오탐이 쌓이고,
+오탐이 쌓이면 훅 전체를 우회하게 된다 — 그러면 위의 넷도 같이 무력해진다.
+
+### 뺀 것 (0.5.0)
+
+| 뺀 것 | 이유 |
+|---|---|
+| `session-end-guard` (Stop) | 마감 안 했다고 턴 종료를 막았다. 막는 대상이 되돌릴 수 있는 것이고, 같은 사실을 다음 세션 시작 훅이 이미 알려준다 |
+| `commit-guard`의 테스트 검사 | 소스 수정 시각과 `build/test-results` 시각을 비교했다. 주석 한 줄만 고쳐도, Gradle이 up-to-date로 건너뛰어도 걸렸다 |
+
+규칙 2(테스트를 마친 커밋)는 사라진 게 아니라 **훅에서 사람의 판단으로
+옮겼다.** `inspect`가 커밋을 하나씩 체크아웃해 실제로 돌려본다.
 
 ## 설치
 
@@ -110,7 +122,7 @@ CLAUDE.md
 
 ```
 RULES.md                          절대 규칙 10개 — 단일 원본
-hooks/                            5개 + 폴리글롯 디스패처 + 입력 파서
+hooks/                            4개 + 폴리글롯 디스패처 + 입력 파서
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
