@@ -8,7 +8,7 @@
     {
       "name": "dev-harness",
       "description": "기능 구체화부터 PR·세션 마감까지 강제하는 개발 하네스",
-      "version": "0.3.1",
+      "version": "0.6.0",
       "source": "./",
       "author": {
         "name": "kth4778"
