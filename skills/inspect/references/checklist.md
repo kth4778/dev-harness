@@ -45,7 +45,42 @@ git log --oneline --name-only "$BASE"..HEAD
 - 의존 방향이 한쪽인가
 - **구현이 하나뿐인 인터페이스를 만들지 않았나** (과잉설계도 위반이다)
 
-### 6. CLAUDE.md 3층
+### 6. 문서 — README(커밋됨) · CLAUDE.md(안 됨)
+
+**여기서 보는 것은 `README.md`다.** `CLAUDE.md`는 커밋되지 않아 지금 안 고쳐도
+PR이 늦어지지 않지만, README는 **이 PR에 못 태우면 PR이 하나 더 필요해진다.**
+
+#### 6-1. README가 이번 변경을 반영하나
+
+이번 PR이 **밖에서 보이는 것**을 바꿨으면 README도 바뀌어야 한다.
+
+```bash
+# 새로 생긴 엔드포인트가 문서에 있나
+git diff "$BASE"..HEAD -- '*.java' | grep -E '^\+.*@(Get|Post|Put|Delete|Patch|Request)Mapping'
+
+# 새로 생긴 표가 문서에 있나
+git diff --name-only --diff-filter=A "$BASE"..HEAD | grep -E 'db/migration/.*\.sql'
+
+# 새로 생긴 필수 환경변수가 문서에 있나
+git diff "$BASE"..HEAD -- '*.yml' '*.yaml' | grep -E '^\+.*\$\{[A-Z_]+:'
+
+# README가 이 PR에 들어 있나
+git diff --name-only "$BASE"..HEAD | grep -E '(^|/)README\.md$'
+```
+
+위 셋 중 하나라도 결과가 나왔는데 **README가 diff에 없으면 근거를 대야 한다.**
+
+| 판정 | 조건 |
+|---|---|
+| **PASS** | README를 같이 고쳤다 |
+| **PASS** | 바꾼 것이 내부 구현뿐이라 README가 말하는 사실이 그대로다 — **무엇이 그대로인지 한 줄로 적는다** |
+| **FAIL** | 위 명령에 걸렸는데 README를 안 봤다 |
+
+특히 확인할 넷 — **팀 계약(엔드포인트 경로·이름)** · 표 소유 목록 ·
+필수 환경변수 · "상태/미구현" 절. **경로 이름은 문서가 아니라 코드를 정본으로 본다.**
+문서가 `verify`라 적었는데 코드가 `resolve`면 문서가 틀린 것이다.
+
+#### 6-2. CLAUDE.md는 맞는 층에 갔나
 
 새로 생긴 도메인 사실·결정·함정이 **맞는 층**에 갔나.
 
@@ -55,7 +90,13 @@ git log --oneline --name-only "$BASE"..HEAD
 | 브랜치 전략·스택·모듈 인덱스 | 2층 `<repo>/CLAUDE.md` |
 | 하네스 변경 이력 | 2층 변경 이력 표 |
 
-상위 층에 상세를 몰아쓰지 않았나.
+상위 층에 상세를 몰아쓰지 않았나. **마무리는 Phase 8(`wrap`)에서 한다** —
+여기서는 빠진 것이 있는지만 본다.
+
+#### 6-3. 고친 결함이 "알려진 구멍" 목록에 남아 있지 않나
+
+`CLAUDE.md`의 알려진 구멍 목록에서 **이번에 고친 항목을 지운다.**
+고쳐 놓고 목록에 남기면 다음 세션이 이미 없는 문제를 다시 조사한다.
 
 ### 7. PR 리뷰 봇
 

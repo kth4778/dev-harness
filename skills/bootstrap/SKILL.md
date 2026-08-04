@@ -15,7 +15,7 @@ description: Use when starting any conversation - establishes the development wo
 
 # 개발 하네스
 
-세션 하나 = 기능 하나 = PR 하나. 7단계를 순서대로 통과한다.
+세션 하나 = 기능 하나 = PR 하나. 8단계를 순서대로 통과한다.
 
 ## 워크플로우
 
@@ -25,10 +25,14 @@ description: Use when starting any conversation - establishes the development wo
 | 2 | 계획 | `plan` | 사용자가 계획을 수락 |
 | 3 | 하네스 설계 | `harness-design` | 사용자가 팀 구성을 승인 |
 | 4 | 개발 | `build` · `tdd-java` | 모든 태스크 완료 |
-| 5 | 전수 검사 | `inspect` | 절대 규칙 10개 **전부** PASS |
+| 5 | 전수 검사 + **README 동기화** | `inspect` | 절대 규칙 10개 **전부** PASS |
 | 6 | PR | `pr` | 봇 2개 리뷰 통과 후 머지 |
 | 7 | 회고 | `retro` | 승격 제안에 대한 사용자 판단 |
-| 8 | 세션 마감 | `wrap` | [3] 자리가 비었는지 확인 |
+| 8 | 세션 마감 + **CLAUDE.md 최신화** | `wrap` | [3] 자리가 비었는지 확인 |
+
+**문서는 두 자리로 갈라져 있다.** `README.md`는 커밋되므로 **Phase 5에서
+같은 PR에 태우고**, `CLAUDE.md`는 커밋되지 않으므로 Phase 8에서 마무리한다.
+머지된 뒤에 README를 고치면 PR이 하나 더 필요하다(규칙 6-2).
 
 각 Phase의 상세는 해당 스킬에 있다. 여기서는 순서와 게이트만 안다.
 
