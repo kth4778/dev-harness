@@ -27,6 +27,29 @@ git diff --stat "$BASE"..HEAD
 git log --oneline "$BASE"..HEAD
 ```
 
+## 시작 전 — 도장이 유효한가
+
+**검토자의 통과 도장은 시각이 아니라 커밋 해시에 붙는다.**
+
+```bash
+git diff --name-only "$(cat .harness/stamp)"..HEAD -- '*/src/main/*' 'src/main/*'
+```
+
+**결과가 비어 있지 않으면 검사를 시작하지 않는다.** 검토자가 본 것은 그 해시의
+코드이고, 그 뒤의 변경은 아무도 안 봤다. 바뀐 부분을 검토자에게 다시 보내고
+통과한 뒤 도장을 갱신한다.
+
+2026-08-06에 이걸 안 보고 전수 검사를 통과시켰다. `verifier` 도장 뒤에 운영 파일
+7개가 소켓 계층까지 바꿨는데 아무도 안 봤고, PR 직전에 사람이 막았다. 다시 검토를
+붙이니 **치명 2 · 중대 1**이 나왔다.
+
+`stamp-guard` 훅이 `gh pr create`에서 같은 것을 막지만, **막힌 뒤에 아는 것보다
+시작 전에 아는 것이 싸다.** 전부 PASS한 뒤 도장을 현재 HEAD로 갱신한다.
+
+```bash
+git rev-parse HEAD > .harness/stamp
+```
+
 ## 10개 판정
 
 → [`references/checklist.md`](references/checklist.md) — 10개 판정 항목의 판정 기준 전문
