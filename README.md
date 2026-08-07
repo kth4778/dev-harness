@@ -40,7 +40,7 @@
 `<git루트>/.harness/wiki` 한 줄이 그 저장소를 가리키고, **없으면 건너뛴다.**
 Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 
-## 훅 4개 — 되돌릴 수 없는 것만 막는다
+## 훅 6개 — 되돌릴 수 없는 것만 막는다
 
 | 훅 | 이벤트 | 막는 것 |
 |---|---|---|
@@ -48,6 +48,8 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 | `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
 | `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
+| `stamp-guard` | PreToolUse(Bash) | 검토 도장 이후에 운영 코드가 바뀐 채로 `gh pr create` |
+| `worktree-guard` | PreToolUse(Bash) | 에이전트가 도는 중에 `git switch`·`checkout`·`reset --hard` |
 
 **기준은 "되돌릴 수 있나"다.** public 저장소에 한 번 올라간 시크릿과 보호
 브랜치 커밋은 지워도 히스토리에 남고, 나간 PR 코멘트는 지워도 알림이 이미
@@ -95,6 +97,40 @@ claude plugin install dev-harness@dev-harness
 ```
 
 Windows에는 Git for Windows(bash)가 필요하다. 없으면 훅이 조용히 건너뛴다.
+
+### Windows 디스패처의 함정 둘 — 훅 전체를 조용히 무력화한다
+
+`hooks/run-hook.cmd`는 cmd.exe와 bash가 같이 읽는 폴리글롯이다. **여기가 깨지면
+훅 여섯 개가 전부 안 도는데, 아무 표시도 안 난다.** 2026-08-07에 둘 다 실물로 겪었다.
+
+**1. 이 파일에 비ASCII 문자를 넣지 마라.**
+
+cmd.exe는 `.cmd`를 OEM 코드페이지(한국어 Windows면 cp949)로 읽는다. UTF-8 한글
+바이트가 그렇게 디코딩되면 **cmd의 명령 구분자가 튀어나와 `REM` 줄이 쪼개지고
+뒷부분이 명령으로 실행된다.** 그러다 `exit /b 1`로 죽는다.
+
+**Claude Code에서 exit 1은 "차단"이 아니라 "오류지만 통과"다.** 그래서 훅이
+전부 통과 판정을 내리고, 로그에도 아무것도 안 남는다.
+
+**2. 괄호 블록 안에 `exit /b %ERRORLEVEL%`를 쓰지 마라.**
+
+cmd는 괄호 블록을 **파싱할 때 통째로** `%ERRORLEVEL%`를 전개한다. 즉 안쪽
+명령이 **돌기 전** 값이 박힌다. 훅이 `2`(차단)로 끝나도 디스패처는 `0`(통과)을
+돌려준다. 호출과 `exit /b`를 **최상위에** 둔다.
+
+**둘 다 "설치돼 있고 문법도 맞는데 아무 일도 안 하는" 모양이다.** 그래서
+고친 뒤에는 반드시 **차단이 실제로 나는지 종료 코드로 확인한다.**
+
+```bash
+printf 'x\n' > .harness/agents-running
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git switch main"}}' \
+  | hooks/run-hook.cmd worktree-guard; echo "exit=$?"   # 2여야 한다
+rm -f .harness/agents-running
+```
+
+**훅 스크립트는 실행 권한 비트가 있어야 한다.** Windows에서 새로 만들면 git이
+`100644`로 기록한다 — `git update-index --chmod=+x hooks/<이름>`으로 세운다.
+이 기계에서는 로컬 파일이 실행 가능해 안 드러나고 **새로 클론한 사람에게만 터진다.**
 
 ## 합격 테스트
 
@@ -149,7 +185,7 @@ CLAUDE.md
 
 ```
 RULES.md                          절대 규칙 10개 — 단일 원본
-hooks/                            4개 + 폴리글롯 디스패처 + 입력 파서
+hooks/                            6개 + 폴리글롯 디스패처 + 입력 파서
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
