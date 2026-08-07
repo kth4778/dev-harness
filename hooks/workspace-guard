@@ -9,6 +9,7 @@ source "$(cd "$(dirname "$0")" && pwd)/lib-input"
 
 read_hook_input
 path=$(json_field "tool_input.file_path")
+tool=$(json_field "tool_name")
 [ -z "$path" ] && exit 0
 
 norm=$(printf '%s' "$path" | tr '\\' '/')
@@ -26,9 +27,14 @@ case "$norm" in
 esac
 
 # ── 에이전트 정의 덮어쓰기 방지 ──────────────────────────────────
+#
+# Write 만 본다. Edit 는 통과시킨다 — 막는 것은 "통째로 뒤바뀌는 것"이지
+# 수정 자체가 아니다. 2026-08-07 이전에는 tool_name 을 안 봐서 둘 다 막았고,
+# 그래서 아래 안내문 2번(Edit로 고친다)이 구조적으로 실행 불가능했다.
+# 훅이 스스로 제시한 해법을 훅이 막는 상태였다.
 case "$norm" in
     */.claude/agents/*.md|.claude/agents/*.md)
-        if [ -f "$path" ]; then
+        if [ "$tool" = "Write" ] && [ -f "$path" ]; then
             block "차단됨 — 이미 존재하는 에이전트 정의를 덮어쓰려 한다.
 
 경로: $path
