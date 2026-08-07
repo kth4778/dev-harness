@@ -34,6 +34,12 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" stamp-guard",
             "shell": "bash",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" worktree-guard",
+            "shell": "bash",
+            "timeout": 10
           }
         ]
       },
