@@ -83,6 +83,10 @@ jobs:
             /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
 
             한국어로 쓴다. 인사말·사과·칭찬은 쓰지 않는다.
+
+            서브에이전트를 백그라운드로 띄우지 마라. 확인이 필요하면 직접 순차로
+            실행한다. 백그라운드로 띄우면 이 실행이 알림을 못 받고 먼저 끝나
+            리뷰가 통째로 사라진다 — 잡은 success로 남아 실패로 보이지도 않는다.
           # gh 한 개만 더 연다. claude_args가 아니라 settings로 여는 것이 핵심이다.
           #
           # 예전에 claude_args --allowed-tools 로 시도했다가 리뷰 스킬 자체가
