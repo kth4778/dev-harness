@@ -27,6 +27,19 @@ flat=$(printf '%s' "$cmd" | tr '\n' ' ')
 # PR을 만드는 명령에만 건다. 조회·수정은 건드리지 않는다.
 printf '%s' "$flat" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
 
+# 훅은 명령의 cwd가 아니라 세션 cwd에서 돈다. 그래서 다른 저장소로 PR을 올리는
+# 명령까지 이 저장소의 도장으로 판정한다 — 2026-08-09에 실제로 그렇게 막혔다.
+# 저장소 A에서 세션을 열고 저장소 B에 PR을 만드는데 A의 도장이 낡았다는 이유로
+# B의 PR이 막혔다. B에는 .harness/ 가 아예 없었다.
+#
+# 명령이 대상 저장소를 밝혔으면(--repo owner/name) 그것이 이 저장소인지 본다.
+# 다르면 판정할 근거가 없으니 통과시킨다 — 거짓 차단은 거짓 통과보다 나쁘다.
+target=$(printf '%s' "$flat" | grep -oE -- '--repo[= ]+[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | head -1 | sed -E 's/^--repo[= ]+//')
+if [ -n "$target" ]; then
+    origin=$(git remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')
+    [ "$target" = "$origin" ] || exit 0
+fi
+
 root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 stamp="$root/.harness/stamp"
 
