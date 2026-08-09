@@ -194,3 +194,5 @@ skills/
   inspect/ pr/ retro/ wrap/       Phase 5~8 (pr references: 봇 리뷰 대응, 위키 반영)
 templates/                        CLAUDE.md 2층·3층 골격
 ```
+
+<!-- 트리거 시험 -->
