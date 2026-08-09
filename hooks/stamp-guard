@@ -56,6 +56,12 @@ git cat-file -e "${sha}^{commit}" 2>/dev/null || block "차단됨 — .harness/s
 
 도장 파일이 낡았거나 다른 저장소의 해시다. 검토를 다시 받고 새 해시를 적어라."
 
+# 도장이 지금 HEAD의 조상이 아니면 판정할 근거가 없다. 다른 갈래의 도장이라
+# git diff 가 거꾸로 나오고, 이 브랜치가 안 건드린 파일까지 "바뀐 것"으로 잡힌다 —
+# 2026-08-09에 기능 브랜치의 도장을 든 채 main 기반 브랜치에서 PR을 만들려다
+# 그렇게 막혔다. 통과시킨다. 거짓 차단은 거짓 통과보다 나쁘다.
+git merge-base --is-ancestor "$sha" HEAD 2>/dev/null || exit 0
+
 # 운영 코드만 본다. 테스트·문서가 바뀐 것은 도장을 무효로 만들지 않는다 —
 # 그렇게 하면 README 한 줄 고칠 때마다 재검토를 요구하게 되고, 사람이 훅을 끈다.
 changed=$(git diff --name-only "$sha..HEAD" -- '*/src/main/*' 'src/main/*' 2>/dev/null)
