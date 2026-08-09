@@ -40,13 +40,14 @@
 `<git루트>/.harness/wiki` 한 줄이 그 저장소를 가리키고, **없으면 건너뛴다.**
 Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 
-## 훅 6개 — 되돌릴 수 없는 것만 막는다
+## 훅 7개 — 되돌릴 수 없는 것만 막는다
 
 | 훅 | 이벤트 | 막는 것 |
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 **제목** + 워크플로우 + 2층 CLAUDE.md + 3층 **경로** 주입 |
 | `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
 | `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) |
+| `secret-guard` | PreToolUse(Bash) | 시크릿이 스테이징된 채로 커밋 — 히스토리에 남으면 못 지운다 |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
 | `stamp-guard` | PreToolUse(Bash) | 검토 도장 이후에 운영 코드가 바뀐 채로 `gh pr create` |
 | `worktree-guard` | PreToolUse(Bash) | 에이전트가 도는 중에 `git switch`·`checkout`·`reset --hard` |

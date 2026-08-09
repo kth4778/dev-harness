@@ -25,6 +25,12 @@
           },
           {
             "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" secret-guard",
+            "shell": "bash",
+            "timeout": 20
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" commit-guard",
             "shell": "bash",
             "timeout": 20
