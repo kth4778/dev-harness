@@ -26,6 +26,12 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      # gh pr view --comments 가 statusCheckRollup 을 함께 물어본다. checks 가 없으면
+      # "Resource not accessible by integration" 으로 죽고, 그 호출을 하는 것이
+      # 리뷰 스킬의 첫 단계(적격성 검사)라 리뷰 전체가 5턴 만에 조용히 끝난다.
+      # 잡은 success 로 남아서 실패로 안 보인다. 2026-08-09에 여기서 세 번 헤맸다.
+      checks: read
+      statuses: read
 
     steps:
       - name: Checkout repository
