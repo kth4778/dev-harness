@@ -1,0 +1,152 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]   # synchronize 없음 — push로는 안 돈다
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+
+jobs:
+  claude-review:
+    # Optional: Filter by PR author
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.user.login == 'new-developer' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # 리뷰를 PR에 남기려면 write여야 한다. read면 잡은 성공으로 끝나는데
+      # 코멘트가 하나도 안 올라온다 — 실패로 보이지 않아 원인 찾기가 어렵다.
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # 리뷰는 base와 head를 비교해야 한다. depth 1이면 히스토리가 없어
+          # 비교 대상을 못 만들고, 볼 게 없으니 몇 초 만에 조용히 끝난다.
+          fetch-depth: 0
+
+      # ⚠ 이 파일을 고치는 PR에서는 리뷰가 안 돈다. 고장이 아니다.
+      #
+      #   Skipping action due to workflow validation: ... The workflow file must
+      #   exist and have identical content to the version on the repository's
+      #   default branch. ... your workflow will begin working once you merge your PR.
+      #
+      # 액션이 main의 워크플로와 내용이 다르면 실행을 거부한다(보안 장치).
+      # 그래서 워크플로 수정은 자기 PR에서 검증이 안 된다 — 머지한 뒤 다른 PR에
+      # push해서 확인해야 한다. 2026-08-06에 이걸 모르고 "또 안 달렸다"로 읽었다.
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          # ★ --comment 를 빼면 리뷰를 다 하고도 아무것도 안 올린다.
+          # 스킬 소스(anthropics/claude-code, plugins/code-review/commands/code-review.md)에
+          # 그대로 적혀 있다.
+          #
+          #   "If --comment argument was NOT provided, stop here.
+          #    Do not post any GitHub comments."
+          #   "If no issues are found and --comment argument is provided,
+          #    post a comment with the following format"
+          #
+          # 즉 "지적이 없어도 한 줄 남긴다"는 스킬이 이미 하는 일이다. 여기 원래
+          # 그걸 손으로 시키는 지시가 붙어 있었는데, 스킬이 이미 하는 것을 다시
+          # 만든 것이었다. 지웠다.
+          #
+          # 2026-08-06에 이걸 모르고 다섯 번을 헤맸다. 헷갈린 이유가 있다 —
+          # 예전(PR #23·#24·#26)에 claude[bot] 요약이 달렸던 것은 Skill 이 막혀
+          # 모델이 우회로 손수 리뷰하며 그 지시를 따랐기 때문이다. 아래에서 Skill
+          # 권한을 열자 스킬이 제대로 돌기 시작했고, --comment 가 없으니 규칙대로
+          # 조용히 끝났다. "고쳤더니 더 안 된다"로 보인 것이 이 순서였다.
+          #
+          # 스킬은 지적이 없으면 인라인은 안 올린다("No buffered inline comments").
+          # 그 줄만 보고 "리뷰가 안 돌았다"로 읽지 마라 — 그건 정상이다.
+          # 그래서 결과와 무관하게 요약 코멘트를 반드시 남기게 한다.
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+
+            한국어로 쓴다. 인사말·사과·칭찬은 쓰지 않는다.
+          # gh 한 개만 더 연다. claude_args가 아니라 settings로 여는 것이 핵심이다.
+          #
+          # 예전에 claude_args --allowed-tools 로 시도했다가 리뷰 스킬 자체가
+          # 차단됐다. 그건 "허용 목록이 전부를 대체해서"가 아니라 Skill이
+          # base GitHub tools에 안 들어 있어서였다 — 액션 문서는
+          # "The base GitHub tools are always included. Use --allowedTools to
+          # add additional tools"라고 말한다. 어느 쪽이든 목록을 손으로 관리하면
+          # 스킬이 내부에서 쓰는 도구를 우리가 다 알아야 해서 같은 사고가 난다.
+          #
+          # settings.permissions.allow 는 기본 권한 집합에 더하는 방식이라
+          # 목록을 대체하지 않는다. 그래서 여기에 gh 하나만 얹는다.
+          #
+          # 2026-08-06 사고: 이 권한이 없어 PR #34에서 리뷰가
+          # 20초·5턴·permission_denials_count=1 로 끝나고 claude가 남긴 것이
+          # 리뷰 0 · 인라인 0 · 코멘트 0 이었다(같은 PR에서 codex는 정상).
+          # 워크플로는 초록불이라 실패로 보이지 않았다.
+          #
+          # 이 파일은 08-02 이후 안 바뀌었고 그때는 PR #23·#24·#26에서 정상
+          # 동작했다. 즉 우리 파일이 아니라 밑(액션 @v1 또는 매 실행 받아오는
+          # code-review 플러그인)이 움직였다. "액션 기본값에 맡긴다"가 그 위험을
+          # 지는 선택이었고, 실제로 터졌다.
+          # ★ Skill 이 빠지면 리뷰가 조용히 망가진다. 2026-08-06에 전체 출력을
+          # 켜서 원인을 눈으로 확인했다. 순서가 이렇다.
+          #
+          #   ① Skill 거부 → "Error: Execute skill: code-review:code-review"
+          #   ② 모델이 우회해서 손으로 리뷰 → 30턴 · 11분 · $5.30
+          #      (스킬로 돌 때보다 훨씬 비싸다. 초기 증상이던 5턴·20초·$0.17은
+          #       거부 직후 포기하고 끝난 것이었다)
+          #   ③ 진짜 버그를 찾아냄
+          #   ④ "MCP inline comment 도구가 이 환경에 없으므로 gh api로 남기겠다"
+          #   ⑤ gh api 도 거부 (여기엔 gh pr comment 만 열려 있다)
+          #   ⑥ "실행 승인이 필요합니다" → CI에는 승인해 줄 사람이 없다 → 그대로 종료
+          #
+          # 리뷰를 다 해놓고 못 올린 것이다. 액션은 is_error=false 로 끝나서
+          # 화면상 초록불이다.
+          #
+          # Skill 을 열면 ①②가 사라진다. 그런데 ④⑤⑥은 안 사라졌다.
+          #
+          # 처음엔 "스킬이 액션의 버퍼드 인라인 경로를 쓰니 gh api 는 필요 없다"고
+          # 적었는데 틀렸다. 2차 진단(45턴 · $8.93)에서 확인한 실제 순서는 이렇다.
+          #
+          #   스킬은 인라인을 mcp__github_inline_comment__create_inline_comment 로 단다
+          #   → 그 MCP 도구가 이 환경에 없다
+          #   → gh api .../pulls/N/comments POST 로 우회한다
+          #   → gh api 가 막혀 승인 대기 → 종료
+          #
+          # 즉 gh api 가 이 환경에서 인라인을 남기는 유일한 경로다. 넓다는 이유로
+          # 안 열었더니 리뷰가 통째로 사라졌다. 연다.
+          #
+          # 넓이에 대한 판단: 이 잡의 토큰은 pull-requests·issues write 뿐이고
+          # contents 는 read 다. gh api 로 할 수 있는 최대가 이미 gh pr comment 로
+          # 할 수 있는 것과 같은 범위 안에 있다.
+          #
+          # ⚠ 그때 모델이 도구를 확인하려고 PR #34 에 테스트 코멘트를 실제로
+          # 올렸다가 gh api DELETE 가 막혀 못 지웠다. 사람이 지웠다. 권한을 좁게
+          # 주면 이런 어중간한 상태가 남는다는 것도 같이 배웠다.
+          settings: |
+            {
+              "permissions": {
+                "allow": ["Skill", "Bash(gh pr comment:*)", "Bash(gh api:*)"]
+              }
+            }
+
+          # 리뷰가 왜 조용한지 파야 하면 show_full_output: true 를 임시로 켠다.
+          # 거부된 도구 이름·에러 원문이 그때만 보인다. 다만 public 저장소라
+          # 리뷰 전문이 Actions 로그에 공개로 남으므로, 확인 직후 다시 끈다.
+          #
+          # "코멘트가 0"이 곧 고장은 아니다. 지적할 것이 없으면 Claude는
+          # "No buffered inline comments"로, Codex는 PR 본문에 👍로 끝낸다.
+          # reviews·comments API만 세면 Codex의 👍를 놓친다 — reactions도 본다.
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+
