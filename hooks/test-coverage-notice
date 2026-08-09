@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# PostToolUse(Bash) — 검사 없이 들어간 동작 변경을 알린다. **막지 않는다.**
+#
+# 왜 있나 (2026-08-09, POK-86에서 실제로 겪은 것):
+#
+#   구현자가 봇 P1 하나를 고치면서 코드에 이렇게 적었다 —
+#   "이 갈래를 결정적으로 여는 장치가 없다." 그 커밋의 검사는 0개였고,
+#   오케스트레이터는 그 문장을 근거로 받아들였다.
+#
+#   다음 검토자가 운영 코드에 훅을 하나 열어 장치를 만들었고, 되돌리는 변이가
+#   그 자리에서 빨간불이 났다(기대 1 / 실제 0). "없다"가 아니라 "못 찾았다"였다.
+#
+#   RULES.md 4절이 이미 이것을 글로 막고 있었다. 그런데 세 세션째 뚫렸다
+#   (2026-08-06 세 번 · 2026-08-09 두 번). 글로 막는 것이 반복해서 실패하면
+#   그건 규칙을 더 세게 쓸 문제가 아니라 기계로 옮길 문제다.
+#
+# 왜 차단이 아닌가:
+#
+#   주석·문서·순수 리팩터 커밋이 정상적으로 걸린다. 실제로 이 브랜치에서
+#   기계 검사를 손으로 돌렸을 때 6건이 나왔고 그중 5건이 정당했다.
+#   오탐이 쌓이면 사람이 훅 전체를 우회한다. 그래서 알리기만 한다.
+
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+source "$here/lib-input"
+
+read_hook_input
+cmd=$(json_field "tool_input.command")
+[ -z "$cmd" ] && exit 0
+
+flat=$(printf '%s' "$cmd" | tr '\n' ' ')
+
+# `git -C <경로> commit`처럼 사이에 옵션이 끼는 형태까지 잡는다.
+# 문자열 "git commit"을 그대로 찾으면 그 형태가 통째로 새는 것을 실물로 확인했다
+# (2026-08-09, commit-guard에 같은 구멍이 있었다).
+printf '%s' "$flat" \
+    | grep -Eq '(^|[;&|[:space:]])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)' \
+    || exit 0
+
+# 훅은 세션 cwd에서 돈다. 명령이 다른 저장소를 향했으면 거기서 판정한다
+# (commit-guard와 같은 규약). 못 정하면 세션 cwd 그대로 둔다.
+# 앞머리의 cd 가 우선이다. `git -C` 는 커밋 메시지 본문에도 나오므로 뒤에 둔다.
+target=$(printf '%s' "$flat" | grep -oE '^[[:space:]]*cd[[:space:]]+("[^"]+"|[^[:space:]]+)' | head -1 \
+    | sed -E 's/^[[:space:]]*cd[[:space:]]+//; s/^"//; s/"$//')
+if [ -z "$target" ]; then
+    target=$(printf '%s' "$flat" | grep -oE 'git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+)' | head -1 \
+        | sed -E 's/^git[[:space:]]+-C[[:space:]]+//; s/^"//; s/"$//')
+fi
+if [ -n "$target" ] && [ -d "$target" ] \
+        && git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    cd "$target" || exit 0
+fi
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+
+# 커밋이 실제로 생겼는지 본다. 실패한 git commit 뒤에 옛 커밋을 놓고 떠들지 않는다.
+files=$(git show --format= --name-only HEAD 2>/dev/null) || exit 0
+[ -z "$files" ] && exit 0
+
+printf '%s\n' "$files" | grep -q '/src/main/\|^src/main/' || exit 0
+printf '%s\n' "$files" | grep -q '/src/test/\|^src/test/' && exit 0
+
+subject=$(git log -1 --format=%s 2>/dev/null)
+mains=$(printf '%s\n' "$files" | grep '/src/main/\|^src/main/')
+
+# PostToolUse의 exit 2는 도구를 되돌리지 않는다. 이미 커밋됐고, 이 메시지만 전달된다.
+printf '%s\n' "알림 — 운영 코드가 바뀌는데 검사가 안 바뀐 커밋이다. **막지 않는다.**
+
+    $subject
+
+  운영 파일:
+$(printf '%s\n' "$mains" | sed 's/^/      /')
+
+의도한 것이면 그대로 진행한다 — 주석·문서·순수 리팩터가 여기 정상적으로 걸린다.
+
+**「검사를 붙일 장치가 없어서」라면 그 문장을 먼저 검증해라.**
+2026-08-09에 바로 그 주장이 거짓이었다. 검토자가 운영 코드에 훅을 하나 열어
+장치를 만들었고 되돌리는 변이가 빨간불이 났다 — 없는 게 아니라 못 찾은 것이었다.
+
+「찾아봤는데 못 찾았다」와 「존재하지 않는다」는 다르다.
+주석에 「없다」로만 적지 말고 **무엇을 시도했고 어디서 막혔는지**까지 적어라.
+그래야 다음 사람이 반증할 수 있다." >&2
+exit 2

@@ -54,8 +54,14 @@ git remote -v    # 코드 저장소와 다른 곳을 가리켜야 한다
 커밋 전에 검사 스크립트를 돌린다.
 
 ```bash
-python scripts/check_docs.py     # 저장소마다 다르다. 규약 문서가 명령을 정한다
+PYTHONIOENCODING=utf-8 python scripts/check_docs.py   # 저장소마다 다르다. 규약 문서가 명령을 정한다
 ```
+
+> 🔴 **`PYTHONIOENCODING=utf-8`을 빼지 마라.** Windows 콘솔은 cp949라 검사기가
+> 한글을 출력하는 순간 **스크립트가 죽고 `exit=1`이 난다.** 그러면 「검사 실패」와
+> 「인코딩 사고」가 구분되지 않는다 — 2026-08-09에 실제로 그렇게 한 바퀴 돌았다.
+> 같은 함정이 테스트 결과 집계에서 이미 네 번 원인을 삼켰다(`inspect` 참고).
+> **`exit=1`을 보면 먼저 인코딩부터 의심한다.**
 
 ### 승인권을 확인한다
 
