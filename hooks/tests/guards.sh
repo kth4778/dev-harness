@@ -80,8 +80,8 @@ r 2 "$(cg '"git commit -m x"')"                       '_workspace 스테이징'
 fresh
 printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm "add"   # 이미 추적 중
 printf 'y\n' >> CLAUDE.md                                              # 고치기만 함
-r 0 "$(cg '"git commit -am x"')"                      '규칙 9 는 인덱스만 본다 — .claude/ 가 늘 워킹트리에 있어 넓히면 다 막힌다'
-r 0 "$(cg '"git commit -m x"')"                       '[대조] -a 없으면 통과'
+r 2 "$(cg '"git commit -am x"')"                      '추적 중인 CLAUDE.md 를 -a 로 커밋'
+r 2 "$(cg '"git commit -m x"')"                       '[대조] -a 가 없어도 워킹트리 변경을 본다'
 fresh
 printf 'code\n' > src.java; git add src.java
 r 0 "$(cg '"git commit -m x"')"                       '평범한 소스'

@@ -33,14 +33,15 @@ flatten_command() {
 # 옵션은 순서가 자유롭고(`git --no-pager -C <경로> commit`), `-C`·`-c`는 뒤에
 # 인자를 하나 더 먹는다. 그래서 「인자를 먹는 옵션」을 먼저 놓고 반복시킨다.
 #
-# 명령 치환(`$(…)`·백틱) 안의 커밋도 잡는다. 셸이 그것을 실제로 실행한다.
+# 명령 치환 안의 커밋도 잡는다. 셸이 그것을 실제로 실행한다.
 #
-# 다만 `"` 는 시작 문자에 넣지 않는다. 넣었더니 `echo "git commit "` 같은
-# 평범한 출력까지 커밋으로 읽어 보호 브랜치에서 막혔다 (codex, PR #27).
-# `out="$(git commit -am x)"` 는 `git` 앞이 `(` 라 그것만으로 잡힌다.
+# 다만 여는 괄호 하나만으로는 잡지 않는다. `(` 를 시작 문자에 넣었더니
+# `echo "(git commit )"` 같은 평범한 출력까지 커밋으로 읽어 보호 브랜치에서
+# 막혔다 (codex, PR #28). 그 앞 판에서는 `"` 를 넣었다가 같은 오탐을 냈다.
+# 실행되는 형태인 `$(` 와 백틱만 연다 — `out="$(git commit -am x)"` 가 그것이다.
 is_commit_command() {
     printf '%s' "$1" | grep -Eq \
-        '(^|[;&|[:space:](`])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
+        '(^|[;&|[:space:]`]|\$\()git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
 }
 
 # 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.
@@ -115,11 +116,19 @@ committable_files() {
 # 워킹트리를 읽을 때 저장소 루트를 앞에 붙인다. 목록의 경로가 루트 기준인데
 # 훅의 cwd는 하위 폴더일 수 있다 — `sub/`에서 커밋하면 `sub/sub/config`를
 # 찾다가 아무것도 못 읽고 조용히 통과했다.
+# 두 판본 사이에 개행을 끼운다. 그냥 이어 붙이면 앞 판본의 끝과 뒤 판본의
+# 시작이 맞물려 **어느 쪽에도 없는 문자열**이 생긴다 — 인덱스가
+# `AKIA12345678` 로 끝나고 워킹트리가 `90ABCDEF` 로 시작하면 없던 키가
+# 만들어져 정상 커밋이 막혔다 (codex, PR #28).
+#
+# 심볼릭 링크는 따라가지 않는다. git 이 커밋하는 것은 링크가 가리키는 내용이
+# 아니라 링크 자체다. 따라가면 추적되지도 않는 로컬 설정 파일을 읽고 막는다.
 committable_content() {
     local f="$1" root
     git show ":$f" 2>/dev/null
+    printf '\n'
     root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
-    [ -f "$root/$f" ] && cat "$root/$f" 2>/dev/null
+    [ -f "$root/$f" ] && [ ! -L "$root/$f" ] && cat "$root/$f" 2>/dev/null
     return 0
 }
 
@@ -138,17 +147,21 @@ is_executable_commit() {
     mode=$(git ls-files -s -- ":/$f" 2>/dev/null | awk '{print $1}')
     [ -n "$mode" ] && [ "$mode" != "100755" ] && return 1
 
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+    # 워킹트리에 없으면 인덱스 쪽 판정을 따른다. `-L` 을 함께 보는 이유는
+    # 끊긴 심볼릭 링크에서 `-e` 가 거짓이기 때문이다 — 링크는 엄연히 있고
+    # git 은 그것을 120000 으로 기록한다.
+    [ -e "$root/$f" ] || [ -L "$root/$f" ] || return 0
+
+    # 파일 **종류** 검사는 core.fileMode 와 무관하다. fileMode 가 꺼져 있어도
+    # git 은 정규 파일↔심볼릭 링크 전환을 감지해 120000 으로 기록한다.
+    # 링크가 끊겨 있으면 클론한 사람에게 훅이 아예 없는 것과 같다
+    # (codex, PR #27·#28).
+    [ -f "$root/$f" ] && [ ! -L "$root/$f" ] || return 1
+
+    # 실행 **비트** 비교만 fileMode 에 달려 있다. 꺼져 있으면 git 이 워킹트리
+    # 비트를 무시하므로 인덱스 쪽 판정이 전부다.
     if [ "$(git config --bool --get core.fileMode 2>/dev/null)" != "false" ]; then
-        root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
-        # 워킹트리에 없으면 인덱스 쪽을 따른다. `-L` 을 함께 보는 이유는
-        # 끊긴 심볼릭 링크에서 `-e` 가 거짓이기 때문이다 — 링크는 엄연히 있고
-        # git 은 그것을 120000 으로 기록한다.
-        [ -e "$root/$f" ] || [ -L "$root/$f" ] || return 0
-        # 정규 파일이어야 한다. 심볼릭 링크는 git 이 120000 으로 기록하는데
-        # `ls -ld` 가 `lrwxr-xr-x` 를 뱉어 실행 가능으로 보인다. 링크가 끊겨
-        # 있으면 클론한 사람에게 훅이 아예 없는 것과 같다
-        # (codex, PR #27).
-        [ -f "$root/$f" ] && [ ! -L "$root/$f" ] || return 1
         case "$(ls -ld "$root/$f" 2>/dev/null)" in
             ???[xs]*) : ;;
             *)        return 1 ;;

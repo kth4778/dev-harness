@@ -41,11 +41,13 @@ feature 브랜치를 만들고 거기서 작업한다:
 esac
 
 # ── 규칙 9: AI 산출물 ────────────────────────────────────────────
-# 여기는 **인덱스만** 본다. secret-guard 와 달리 넓히면 안 된다 —
-# `.claude/` 와 `_workspace/` 는 세션 내내 워킹트리에 있으므로 워킹트리까지
-# 보면 모든 커밋이 막힌다. 추적 중인 AI 파일을 `-a` 로 커밋하는 경로는
-# 규칙 9 위반 상태 자체이고, 그것은 .gitignore 로 잡을 문제다.
-staged=$(staged_files)
+# 여기도 넓게 본다. 한때 「`.claude/` 가 세션 내내 워킹트리에 있으니 넓히면
+# 다 막힌다」고 보고 인덱스에 묶어 뒀는데, **근거가 틀렸다** —
+# `git diff --name-only` 는 **추적 파일의 변경**만 나열하므로 .gitignore 된
+# `.claude/` 는 애초에 안 나온다. 반대로 이미 추적 중인 `CLAUDE.md` 는
+# .gitignore 로 못 막으므로, 인덱스만 보면 `-a` 커밋이 그대로 지나간다
+# (codex, PR #28).
+staged=$(committable_files)
 if [ -n "$staged" ]; then
     offenders=$(printf '%s\n' "$staged" \
         | grep -E '(^|/)(\.claude/|\.harness/|_workspace/|_archive/|CLAUDE\.md$|AGENTS\.md$)' || true)
@@ -72,11 +74,10 @@ fi
 # 로컬에서는 실행 가능해 안 드러나고 **새로 클론한 사람에게만 터진다.**
 # README에 경고를 적어 뒀는데도 2026-08-11 하루에 두 번 놓쳤다
 # (secret-guard·lib-cmd). 글로 막는 것이 반복해서 실패하면 기계로 옮길 문제다.
-# 여기는 넓게 본다. `-a` 커밋은 실행 비트 변경만 담을 수도 있어 인덱스에
-# 안 나타난다. hooks/ 아래 확장자 없는 파일만 보므로 오탐 여지가 좁다.
-committable=$(committable_files)
-if [ -n "$committable" ]; then
-    unexec=$(printf '%s\n' "$committable" | grep -E '(^|/)hooks/[^/.]+$' | while IFS= read -r f || [ -n "$f" ]; do
+# `-a` 커밋은 실행 비트 변경만 담을 수도 있어 인덱스에 안 나타난다.
+# 위에서 구한 넓은 목록을 그대로 쓴다.
+if [ -n "$staged" ]; then
+    unexec=$(printf '%s\n' "$staged" | grep -E '(^|/)hooks/[^/.]+$' | while IFS= read -r f || [ -n "$f" ]; do
         is_executable_commit "$f" || printf '  %s\n' "$f"
     done)
     if [ -n "$unexec" ]; then

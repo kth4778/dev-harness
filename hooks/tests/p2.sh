@@ -78,16 +78,11 @@ r 2 "$(cg '"git commit -m x"')"                                        '비ASCII
 fresh; printf '{}\n' > hooks/hooks.json; git add hooks/hooks.json
 r 0 "$(cg '"git commit -m x"')"                                        '확장자 있는 파일은 대상 아님'
 
-echo "── 규칙 9 는 인덱스만 본다 ──"
+echo "── 규칙 9 ──"
 fresh; mkdir -p _workspace; printf 'x\n' > _workspace/a.md; git add -f _workspace/a.md
 r 2 "$(cg '"git commit -m x"')"                                        '_workspace 스테이징'
 fresh; mkdir -p .harness; printf 'x\n' > .harness/root; git add -f .harness/root
 r 2 "$(cg '"git commit -m x"')"                                        '.harness 스테이징'
-# 넓히면 .claude/ 가 세션 내내 워킹트리에 있어 모든 커밋이 막힌다. 그래서 규칙 9
-# 만은 인덱스에 머문다 — 추적 중인 AI 파일은 .gitignore 로 잡을 문제다.
-fresh; printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm add
-printf 'y\n' >> CLAUDE.md
-r 0 "$(cg '"git commit -am x"')"                                       '추적 중인 CLAUDE.md 수정은 인덱스에 없으면 통과'
 
 
 echo "── 봇 4차 지적 (PR #27) ──"
@@ -114,6 +109,66 @@ r 2 "$(cg '"git commit -am x"')"                       'P2 훅이 심볼릭 링�
 # P2: 따옴표 안의 글자는 실행되지 않는다.
 fresh; git checkout -q -b main 2>/dev/null || git branch -qm main
 r 0 "$(cg '"echo \"git commit \""')"                   'P2 echo 안의 git commit 은 실행이 아니다'
+
+
+echo "── 봇 5차 지적 (PR #28) ──"
+# P1: 추적 중인 AI 파일은 .gitignore 로 못 막는다. -a 로 커밋되면 규칙 9 위반이다.
+fresh; printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm add
+printf 'y\n' >> CLAUDE.md
+r 2 "$(cg '"git commit -am x"')"                       'P1 추적 중인 CLAUDE.md 를 -a 로'
+# 넓혀도 오탐이 안 나는 근거 — gitignore 된 것은 추적되지 않아 diff 에 없다.
+fresh; printf '.claude/\n_workspace/\n' > .gitignore; git add .gitignore; git commit -qm ignore
+mkdir -p .claude/agents _workspace; printf 'x\n' > .claude/agents/a.md; printf 'y\n' > _workspace/01.md
+printf 'code\n' > src.txt; git add src.txt
+r 0 "$(cg '"git commit -am x"')"                       'gitignore 된 .claude/ 는 오탐을 안 낸다'
+# P2: 파일 타입 검사는 core.fileMode 와 무관해야 한다.
+fresh; printf '#!/usr/bin/env bash\n' > hooks/sl; git add hooks/sl
+git update-index --chmod=+x hooks/sl; git commit -qm add
+rm hooks/sl; ln -s /nonexistent hooks/sl
+r 2 "$(cg '"git commit -am x"')"                       'P2 fileMode=false 라도 심볼릭 링크는 막는다'
+# P2: 심볼릭 링크를 따라가 대상 파일을 읽으면 안 된다. git 은 링크 경로만 커밋한다.
+fresh; printf '%s\n' "$AWS_FAKE" > "$R/../outside-secret.txt" 2>/dev/null || printf '%s\n' "$AWS_FAKE" > /tmp/outside-secret.txt
+ln -s /tmp/outside-secret.txt link.txt; git add link.txt
+r 0 "$(sg '"git commit -m x"')"                        'P2 링크 대상의 내용까지 읽지 않는다'
+# P2: 인덱스와 워킹트리를 이어붙여 경계에서 없던 키가 생기면 안 된다.
+fresh; printf 'prefix AKIA12345678' > half.txt; git add half.txt
+printf '90ABCDEF suffix\n' > half.txt
+r 0 "$(sg '"git commit -m x"')"                        'P2 두 판본 경계에서 가짜 키가 생기지 않는다'
+# P2: 따옴표 안의 괄호는 실행이 아니다.
+fresh; git branch -qm main
+r 0 "$(cg '"echo \"(git commit )\""')"                 'P2 echo 안의 (git commit )'
+
+
+echo "── 봇 5차 지적 (PR #28) ──"
+# P1: 추적 중인 AI 파일을 -a 로 커밋하는 길. .gitignore 는 이미 추적 중인 것을
+# 못 막는다. 추적 안 되는 .claude/ 는 어차피 목록에 안 나오므로 오탐도 없다.
+fresh; printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm add
+printf 'y\n' >> CLAUDE.md
+r 2 "$(cg '"git commit -am x"')"                       'P1 추적 중인 CLAUDE.md 를 -a 로'
+mkdir -p .claude; printf 'x\n' > .claude/settings.json   # 추적 안 됨
+r 2 "$(cg '"git commit -am x"')"                       'P1 추적 안 된 .claude/ 는 판정에 안 낀다'
+fresh; mkdir -p .claude; printf 'x\n' > .claude/settings.json
+printf 'code\n' > src.java; git add src.java
+r 0 "$(cg '"git commit -am x"')"                       '추적 안 된 .claude/ 만 있으면 통과'
+# P2: fileMode=false 여도 정규 파일 → 심볼릭 링크 타입 변경은 git 이 기록한다.
+fresh
+printf '#!/usr/bin/env bash\n' > hooks/lk; git add hooks/lk
+git update-index --chmod=+x hooks/lk; git commit -qm add
+rm hooks/lk; ln -s /nonexistent hooks/lk
+r 2 "$(cg '"git commit -am x"')"                       'P2 fileMode=false 에서도 심볼릭 링크를 잡는다'
+# P2: 심볼릭 링크의 대상 내용을 읽으면 안 된다. git 은 링크 경로만 커밋한다.
+fresh; printf '%s\n' "$AWS_FAKE" > /tmp/probe-cred-$$.txt
+ln -s "/tmp/probe-cred-$$.txt" cred-link; git add cred-link
+r 0 "$(sg '"git commit -m x"')"                        'P2 링크가 가리키는 파일 내용은 커밋되지 않는다'
+rm -f "/tmp/probe-cred-$$.txt"
+# P2: 인덱스와 워킹트리를 이어붙일 때 경계에서 가짜 시크릿이 생기면 안 된다.
+fresh
+printf 'AKIA12345678' > split.txt; git add split.txt
+printf '90ABCDEFGH\n' > split.txt
+r 0 "$(sg '"git commit -m x"')"                        'P2 두 판본의 경계가 이어져 키가 되면 안 된다'
+# P2: 따옴표 안의 괄호도 실행이 아니다.
+fresh; git branch -qm main
+r 0 "$(cg '"echo \"(git commit )\""')"                 'P2 echo 안의 (git commit )'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
