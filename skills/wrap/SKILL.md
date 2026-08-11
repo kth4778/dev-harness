@@ -109,6 +109,7 @@ git status --porcelain | grep -E '\.claude|_workspace|_archive|CLAUDE\.md'
 
 ```gitignore
 .claude/
+.harness/
 _workspace/
 _archive/
 CLAUDE.md

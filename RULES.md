@@ -278,3 +278,14 @@ bash probe-pr-guard.sh
 
 **세 갈래를 한 스크립트에 담고 고치기 전후로 같은 것을 돌린다.** 기대값을
 스크립트에 박아두면 "전 22 OK / 5 FAIL → 후 27 OK"처럼 고친 증거가 숫자로 남는다.
+
+시험은 `hooks/tests/`에 있다. 고치기 전과 고친 뒤 두 번 돌린다.
+
+```bash
+hooks/tests/run-all.sh                    # 지금 훅
+git show <옛커밋>:hooks/<이름> > /tmp/old/<이름>
+hooks/tests/run-all.sh /tmp/old           # 옛 판본에 같은 시험을 먹인다
+```
+
+**고친 것에는 시험을 하나 보탠다.** 구멍을 찾았다는 것은 그 갈래를 아무도
+안 재고 있었다는 뜻이다.

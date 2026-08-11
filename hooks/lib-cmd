@@ -19,14 +19,35 @@ flatten_command() {
 # 벗기는 이유: 따옴표 친 것을 통째로 버리면 반대쪽으로 샌다. 셸은 `"-a"`를
 # git에 `-a`로 그대로 넘기므로 `git commit "-a" -m x`는 진짜 -a 커밋이다.
 # 2026-08-11 codex 리뷰(PR #22)가 잡았다 — 통째로 버리던 판에서 실물로 샜다.
+# 옵션 이름 앞에 토큰 경계를 요구한다. 앵커가 없으면 `--template=foo-m`의
+# 꼬리를 -m 옵션으로 읽고 그 뒤의 진짜 `-a`를 메시지로 삼켜 버린다.
+# 2026-08-11 codex 리뷰(PR #23)가 잡았다.
 strip_message() {
     printf '%s' "$1" | sed -E "
-        s/(-m|--message)[[:space:]]*=?[[:space:]]*\"[^\"]*\"/\1 MSG/g
-        s/(-m|--message)[[:space:]]*=?[[:space:]]*'[^']*'/\1 MSG/g
-        s/(-F|--file)[[:space:]]*=?[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]]+)/\1 MSG/g
-        s/(-m|--message)[[:space:]]*=?[[:space:]]*[^[:space:]]+/\1 MSG/g
+        s/(^|[[:space:]])(-m|--message)[[:space:]]*=?[[:space:]]*\"[^\"]*\"/\1\2 MSG/g
+        s/(^|[[:space:]])(-m|--message)[[:space:]]*=?[[:space:]]*'[^']*'/\1\2 MSG/g
+        s/(^|[[:space:]])(-F|--file)[[:space:]]*=?[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:];&|]+)/\1\2 MSG/g
+        s/(^|[[:space:]])(-m|--message)[[:space:]]*=?[[:space:]]*[^[:space:];&|]+/\1\2 MSG/g
         s/[\"']//g
     "
+}
+
+# 커밋 명령이 든 조각만 남긴다.
+#
+# Bash 도구는 명령을 여러 개 이어 보낸다. 전체 문자열에서 플래그를 찾으면
+# 뒤따르는 남의 인자를 커밋 옵션으로 읽는다 — `git commit -m ok && printf x "-a"`가
+# -a 커밋으로 판정돼 워킹트리 전체를 검사하고 엉뚱한 것을 막았다.
+# 2026-08-11 codex 리뷰(PR #23)가 잡았다.
+#
+# 메시지를 먼저 지운 뒤에 쪼갠다. 커밋 메시지 본문에 든 `;`·`&&`로 조각이
+# 잘못 갈라지는 것을 막는다.
+commit_segment() {
+    local bare; bare=$(strip_message "$1")
+    # `|| [ -n "$seg" ]` 가 없으면 개행 없이 끝나는 마지막 조각을 버린다.
+    # 명령이 하나뿐일 때가 바로 그 경우라 판정이 통째로 죽는다.
+    printf '%s' "$bare" | sed -E 's/(&&|\|\||;|\|)/\n/g' | while IFS= read -r seg || [ -n "$seg" ]; do
+        is_commit_command " $seg " && printf '%s ' "$seg"
+    done
 }
 
 # 커밋 명령인가.
@@ -48,8 +69,9 @@ is_commit_command() {
 # `-a`·`--all`·묶음 플래그(`-am`)를 본다. `--amend`는 `--`로 시작하므로
 # 묶음 플래그 갈래에 걸리지 않는다.
 commit_stages_all() {
-    local bare; bare=$(strip_message "$1")
-    printf '%s' "$bare" | grep -Eq '[[:space:]]-[a-zA-Z]*a[a-zA-Z]*([[:space:]]|$)|[[:space:]]--all([[:space:]]|$)'
+    local seg; seg=$(commit_segment "$1")
+    [ -n "$seg" ] || return 1
+    printf ' %s ' "$seg" | grep -Eq '[[:space:]]-[a-zA-Z]*a[a-zA-Z]*([[:space:]]|$)|[[:space:]]--all([[:space:]]|$)'
 }
 
 # 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.
@@ -93,11 +115,30 @@ cd_to_target_repo() {
 # 거르는 것은 삭제(`d`)뿐이다. 타입을 하나씩 적어(ACM) 두면 적지 않은 타입이
 # 조용히 빠진다 — 이름이 바뀐 파일(`R`)이 그렇게 샜다. `git mv ordinary CLAUDE.md`가
 # 규칙 9 검사를 그냥 지나갔다. 2026-08-11 codex 리뷰(PR #22)가 잡았다.
+# `core.quotePath=false`를 붙이는 이유: 기본값이면 비ASCII 이름을 `"\352\262..."`
+# 처럼 따옴표+8진수로 뱉는다. 그 표기는 어떤 경로 패턴과도 안 맞아 검사에서
+# 통째로 빠진다. 2026-08-11 codex 리뷰(PR #23)가 잡았다.
 committed_files() {
     if commit_stages_all "$1"; then
-        git diff HEAD --name-only --diff-filter=d 2>/dev/null
+        git -c core.quotePath=false diff HEAD --name-only --diff-filter=d 2>/dev/null
     else
-        git diff --cached --name-only --diff-filter=d 2>/dev/null
+        git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
+    fi
+}
+
+# 이 커밋이 그 파일에 기록할 권한 모드(100644 / 100755). 모르면 빈 출력.
+#
+# 평소에는 인덱스에 든 모드가 그대로 기록된다. 그런데 `core.fileMode=true`인
+# 저장소에서 `-a`로 커밋하면 **워킹트리의 실행 비트 변경까지 그때 함께
+# 스테이징된다** — 인덱스만 보면 아직 옛 모드라 바뀔 것을 못 본다.
+# 2026-08-11 codex 리뷰(PR #23)가 잡았다.
+committed_mode() {
+    local flat="$1" f="$2" root
+    if commit_stages_all "$flat" && [ "$(git config --get core.fileMode)" != "false" ]; then
+        root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+        if [ -x "$root/$f" ]; then printf '100755'; else printf '100644'; fi
+    else
+        git ls-files -s -- "$f" 2>/dev/null | awk '{print $1}'
     fi
 }
 

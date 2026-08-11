@@ -46,7 +46,7 @@ esac
 staged=$(committed_files "$flat")
 if [ -n "$staged" ]; then
     offenders=$(printf '%s\n' "$staged" \
-        | grep -E '(^|/)(\.claude/|_workspace/|_archive/|CLAUDE\.md$|AGENTS\.md$)' || true)
+        | grep -E '(^|/)(\.claude/|\.harness/|_workspace/|_archive/|CLAUDE\.md$|AGENTS\.md$)' || true)
     if [ -n "$offenders" ]; then
         block "차단됨 — 절대 규칙 9번: AI 산출물은 GitHub에 올리지 않는다.
 
@@ -55,6 +55,7 @@ $offenders
 
 .gitignore에 다음을 추가하고 스테이지에서 내린다:
     .claude/
+    .harness/
     _workspace/
     _archive/
     CLAUDE.md
@@ -71,8 +72,7 @@ fi
 # (secret-guard·lib-cmd). 글로 막는 것이 반복해서 실패하면 기계로 옮길 문제다.
 if [ -n "$staged" ]; then
     unexec=$(printf '%s\n' "$staged" | grep -E '(^|/)hooks/[^/.]+$' | while IFS= read -r f; do
-        mode=$(git ls-files -s -- "$f" 2>/dev/null | awk '{print $1}')
-        [ "$mode" = "100644" ] && printf '  %s\n' "$f"
+        [ "$(committed_mode "$flat" "$f")" = "100644" ] && printf '  %s\n' "$f"
     done)
     if [ -n "$unexec" ]; then
         block "차단됨 — 훅 스크립트에 실행 권한 비트가 없다.
