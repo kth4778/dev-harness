@@ -119,10 +119,12 @@ gh api "repos/<owner>/<repo>/pulls/<N>/comments"  --jq '[.[].user.login] | uniqu
 | 봇 | 언제 도나 |
 |---|---|
 | **codex** | PR 생성 · draft→ready · `@codex review` 코멘트. **push로는 안 돈다** |
-| **claudecode** | **push마다 돈다** |
+| **claudecode** | PR 생성 · draft→ready · reopen. **이 저장소는 push로 안 돈다** — 워크플로 트리거에 `synchronize`가 없다 |
 
-**같은 브랜치에 push하면 codex 리뷰는 아예 못 받고 claudecode만 한 번 더 돈다** —
-리뷰 총량은 그대로인데 **검사 축만 줄어든다.**
+**같은 브랜치에 push하면 둘 다 새로 안 돈다.** codex는 push를 트리거로 안 쓰고,
+claudecode 워크플로는 `synchronize`를 트리거에서 빼 뒀다
+([`.github/workflows/claude-code-review.yml`](../../.github/workflows/claude-code-review.yml)).
+**두 리뷰가 옛 커밋에 그대로 머물고, 고친 코드는 아무도 안 본다.**
 
 실측(2026-08-09, PR #42): push 뒤 codex는 앞 커밋에 머물렀고, claudecode는
 **5턴·$0.15로 돌고 아무것도 안 남겼다**(첫 실행은 29턴·$12.25).

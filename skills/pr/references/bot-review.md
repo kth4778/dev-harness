@@ -11,7 +11,7 @@
 | 봇 | 언제 도나 |
 |---|---|
 | **codex** | **PR 생성·ready 전환·`@codex review` 코멘트뿐.** push로는 **안 돈다** |
-| **claudecode** | **push마다 돈다** |
+| **claudecode** | PR 생성 · draft→ready · reopen. **이 저장소는 push로 안 돈다** — 워크플로 트리거에 `synchronize`가 없다 |
 
 **둘의 트리거가 다르다는 것이 이 규칙의 근거다.** 같은 브랜치에 push하면
 **codex 리뷰는 아예 못 받고 claudecode만 한 번 더 돈다** — 리뷰 총량은 늘지 않고
