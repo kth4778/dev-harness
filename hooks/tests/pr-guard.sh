@@ -5,9 +5,10 @@ H="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 feed() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$1" | bash "$H/pr-guard" >/dev/null 2>&1; echo "$?"; }
 
+pass=0; fail=0
 r() { # 기대값 실제값 설명
     local mark="OK "
-    [ "$1" = "$2" ] || mark="FAIL"
+    if [ "$1" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); mark="FAIL"; fi
     printf '  [%s] 기대 %s / 실제 %s  %s\n' "$mark" "$1" "$2" "$3"
 }
 
@@ -38,3 +39,7 @@ r 2 "$(feed '"gh pr review 20"')"                                  '옵션 없�
 r 2 "$(feed '"gh pr comment 20"')"                                 '본문 없는 comment (fail-closed)'
 r 2 "$(feed '"gh pr comment 20 --body-file /tmp/x.md"')"           '본문을 파일로 넘긴 comment'
 r 0 "$(feed '""')"                                                 '빈 명령'
+
+echo
+echo "════ 합계: OK $pass / FAIL $fail ════"
+[ "$fail" -eq 0 ]

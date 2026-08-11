@@ -171,12 +171,18 @@ fresh; git branch -qm main
 r 0 "$(cg '"echo \"(git commit )\""')"                 'P2 echo 안의 (git commit )'
 
 
-echo "── 봇 6차 지적 (PR #30) ──"
+echo "── 알면서 남긴 오탐 (PR #30·#31) ──"
+# 셸은 실행하지 않지만 훅은 커밋으로 읽는다. 고치려다 진짜 커밋을 놓치는
+# 구멍을 냈으므로 오탐 쪽을 택했다. 이 기대값이 0 으로 바뀌면 누군가 또
+# 정확도를 좇은 것이다 — lib-cmd 의 「알면서 남긴다」 절을 먼저 읽어라.
 fresh; git branch -qm main
-r 0 "$(cg "\"echo '\$(git commit -m example)'\"")"     '작은따옴표 안의 명령 치환은 실행이 아니다'
-r 0 "$(cg "\"printf '%s' '\\\`git commit -m x\\\`'\"")" '작은따옴표 안의 백틱도 마찬가지'
-r 2 "$(cg '"out=$(git commit -am x)"')"                '[대조] 진짜 명령 치환은 잡는다'
+r 2 "$(cg "\"echo '\$(git commit -m example)'\"")"     '작은따옴표 안의 치환 — 알고 남긴 오탐'
+r 2 "$(cg '"echo \"\\$(git commit -m x)\""')"          '이스케이프된 치환 — 알고 남긴 오탐'
+r 2 "$(cg '"out=$(git commit -am x)"')"                '[대조] 진짜 명령 치환도 잡는다'
 r 2 "$(cg "\"git commit -m 'ordinary message'\"")"     '[대조] 작은따옴표 메시지는 평범한 커밋이다'
+# P1 회귀 방지 — 큰따옴표 안 아포스트로피 둘 사이의 진짜 커밋이 사라졌던 자리.
+APO=$(printf "\047")
+r 2 "$(cg "\"echo \\\"it${APO}s\\\"; git commit -m x\"")" 'P1 아포스트로피 사이의 진짜 커밋'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
