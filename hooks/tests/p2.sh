@@ -184,6 +184,18 @@ r 2 "$(cg "\"git commit -m 'ordinary message'\"")"     '[대조] 작은따옴표
 APO=$(printf "\047")
 r 2 "$(cg "\"echo \\\"it${APO}s\\\"; git commit -m x\"")" 'P1 아포스트로피 사이의 진짜 커밋'
 
+echo "── claude 지적 (PR #32) ──"
+# HEAD 없는 저장소에서 하위 폴더 cwd. ls-files 는 --full-name 이 없으면
+# cwd 상대 경로를 뱉고 cwd 아래만 나열한다 — 소비하는 쪽은 전부 루트 기준이다.
+rm -rf "$R"; mkdir -p "$R/sub"; cd "$R" || exit 1
+git init -q -b feature/x .; git config user.email t@t.t; git config user.name t
+git config core.fileMode false; mkdir -p sub/hooks
+printf '%s\n' "$AWS_FAKE" > sub/config; git add sub/config
+cd "$R/sub" || exit 1
+r 2 "$(sg '"git commit -m first"')"                    '최초 커밋 + 하위 폴더 cwd 의 시크릿'
+printf '#!/usr/bin/env bash\n' > hooks/h6; git add hooks/h6
+r 2 "$(cg '"git commit -m first"')"                    '최초 커밋 + 하위 폴더 cwd 의 100644 훅'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

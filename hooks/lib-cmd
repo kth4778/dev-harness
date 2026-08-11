@@ -105,7 +105,11 @@ staged_files() {
     if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
         git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
     else
-        git -c core.quotePath=false ls-files --cached 2>/dev/null
+        # `--full-name` 과 `:/` 가 둘 다 필요하다. 없으면 하위 폴더에서 돌 때
+        # **cwd 상대 경로를 뱉고 cwd 아래만 나열한다.** 이 목록을 받는 쪽은
+        # 전부 루트 기준을 전제하므로 경로가 어긋나 검사가 빈손이 된다
+        # (claude, PR #32).
+        git -c core.quotePath=false ls-files --full-name --cached -- ":/" 2>/dev/null
     fi
 }
 
