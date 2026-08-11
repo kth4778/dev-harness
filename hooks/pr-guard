@@ -48,10 +48,14 @@ is_bot_trigger() {
     esac
 }
 
+# `gh pr edit --body`는 여기서 막지 않는다. PR 설명은 작성자가 쓰는 자리이고
+# GitHub에 리뷰로 기록되지 않는다 — 규칙 10이 겨냥하는 것이 아니다.
+# 막아 두니 PR을 올린 뒤 설명의 오타 하나도 고칠 수 없었다. 2026-08-11에
+# 실물로 겪었다: 본문의 백틱이 셸에 먹혀 첫 줄이 깨졌는데 되돌릴 방법이 없었다.
+# 거짓 차단은 사람이 훅을 끄게 만든다 (RULES.md 242절).
 case "$flat" in
     *"gh pr review"*)      deny "gh pr review" ;;
     *"gh issue comment"*)  deny "gh issue comment" ;;
-    *"gh pr edit"*--body*) deny "gh pr edit --body (리뷰 본문 수정)" ;;
     *"gh pr comment"*)
         if ! is_bot_trigger; then
             deny "gh pr comment (봇 호출 토큰 외의 본문)"

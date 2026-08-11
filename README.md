@@ -52,6 +52,9 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 | `stamp-guard` | PreToolUse(Bash) | 검토 도장 이후에 운영 코드가 바뀐 채로 `gh pr create` |
 | `worktree-guard` | PreToolUse(Bash) | 에이전트가 도는 중에 `git switch`·`checkout`·`reset --hard` |
 
+이 표는 **막는** 훅만 싣는다. 차단하지 않고 알리기만 하는 훅이 하나 더 있다 —
+`test-coverage-notice`(PostToolUse). 파일은 모두 8개다.
+
 **기준은 "되돌릴 수 있나"다.** public 저장소에 한 번 올라간 시크릿과 보호
 브랜치 커밋은 지워도 히스토리에 남고, 나간 PR 코멘트는 지워도 알림이 이미
 갔다. 이런 것만 기계가 막는다.
@@ -102,7 +105,7 @@ Windows에는 Git for Windows(bash)가 필요하다. 없으면 훅이 조용히 
 ### Windows 디스패처의 함정 둘 — 훅 전체를 조용히 무력화한다
 
 `hooks/run-hook.cmd`는 cmd.exe와 bash가 같이 읽는 폴리글롯이다. **여기가 깨지면
-훅 여섯 개가 전부 안 도는데, 아무 표시도 안 난다.** 2026-08-07에 둘 다 실물로 겪었다.
+훅이 하나도 안 도는데, 아무 표시도 안 난다.** 2026-08-07에 둘 다 실물로 겪었다.
 
 **1. 이 파일에 비ASCII 문자를 넣지 마라.**
 
@@ -186,7 +189,7 @@ CLAUDE.md
 
 ```
 RULES.md                          절대 규칙 10개 — 단일 원본
-hooks/                            6개 + 폴리글롯 디스패처 + 입력 파서
+hooks/                            8개 + 폴리글롯 디스패처 + 입력 파서
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
