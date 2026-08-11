@@ -39,8 +39,12 @@ flatten_command() {
 # `echo "(git commit )"` 같은 평범한 출력까지 커밋으로 읽어 보호 브랜치에서
 # 막혔다 (codex, PR #28). 그 앞 판에서는 `"` 를 넣었다가 같은 오탐을 냈다.
 # 실행되는 형태인 `$(` 와 백틱만 연다 — `out="$(git commit -am x)"` 가 그것이다.
+# 작은따옴표 안은 통째로 지운다. 셸이 그 안에서는 아무것도 확장하지 않으므로
+# `echo '$(git commit -m x)'` 는 글자를 찍을 뿐이다 (codex, PR #30).
+# 큰따옴표 안은 지우지 않는다 — `"$(git commit)"` 는 실제로 실행된다.
+# `git commit -m 'message'` 는 따옴표 블록을 지워도 앞부분이 남아 그대로 잡힌다.
 is_commit_command() {
-    printf '%s' "$1" | grep -Eq \
+    printf '%s' "$1" | sed -E "s/'[^']*'//g" | grep -Eq \
         '(^|[;&|[:space:]`]|\$\()git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
 }
 

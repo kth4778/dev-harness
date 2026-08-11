@@ -170,6 +170,14 @@ r 0 "$(sg '"git commit -m x"')"                        'P2 두 판본의 경계�
 fresh; git branch -qm main
 r 0 "$(cg '"echo \"(git commit )\""')"                 'P2 echo 안의 (git commit )'
 
+
+echo "── 봇 6차 지적 (PR #30) ──"
+fresh; git branch -qm main
+r 0 "$(cg "\"echo '\$(git commit -m example)'\"")"     '작은따옴표 안의 명령 치환은 실행이 아니다'
+r 0 "$(cg "\"printf '%s' '\\\`git commit -m x\\\`'\"")" '작은따옴표 안의 백틱도 마찬가지'
+r 2 "$(cg '"out=$(git commit -am x)"')"                '[대조] 진짜 명령 치환은 잡는다'
+r 2 "$(cg "\"git commit -m 'ordinary message'\"")"     '[대조] 작은따옴표 메시지는 평범한 커밋이다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
