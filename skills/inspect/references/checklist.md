@@ -6,6 +6,21 @@
 git rev-parse --abbrev-ref HEAD
 ```
 feature 브랜치인가. 베이스가 프로젝트 CLAUDE.md가 정한 대상인가.
+이름이 ASCII인가 — 비ASCII base 브랜치는 claude 리뷰 잡을 죽인다.
+
+**이 브랜치로 열렸던 PR이 이미 머지됐는가.**
+
+```bash
+gh pr list --state merged --head "$(git rev-parse --abbrev-ref HEAD)" --json number,title
+```
+
+**결과가 나오면 FAIL이다.** 머지가 끝난 브랜치를 다시 쓰고 있다는 뜻이고,
+그대로 PR을 올리면 스택 PR이 되어 claude 리뷰가 아예 안 돈다.
+통합 브랜치에서 새 브랜치를 파고 옮긴다.
+
+> 머지할 때 `--delete-branch`를 쓰면 이 상황 자체가 안 생긴다. 이 검사는
+> 그것이 실패했거나 옛 브랜치가 살아남은 경우를 받는 자리다. 훅으로 막던
+> 것을 걷어냈으므로(README 「넣었다가 뺀 것」) 여기가 유일한 강제 지점이다.
 
 ### 2. 커밋 단위
 

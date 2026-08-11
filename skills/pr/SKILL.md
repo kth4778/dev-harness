@@ -160,8 +160,12 @@ gh api "repos/<owner>/<repo>/pulls/<N>/comments"  --jq '[.[].user.login] | uniqu
 ### 🔴 기능 PR은 스쿼시하지 않는다 — 머지 커밋으로 한다
 
 ```bash
-gh pr merge <N> --merge      # 스쿼시(--squash) 아님
+gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 ```
+
+**`--delete-branch`를 붙인다.** 머지된 브랜치가 남아 있으면 다음 세션이 그것을
+재사용한다 — 2026-08-11에 실제로 그렇게 됐고, PR 없이 원격에만 뜬 커밋을
+이틀 뒤에야 발견했다. 지우면 재사용할 대상 자체가 없다(규칙 1).
 
 **스쿼시는 커밋 전부를 한 줄로 접는다.** 그러면 두 가지가 같이 사라진다.
 
@@ -185,7 +189,8 @@ gh pr merge <N> --merge      # 스쿼시(--squash) 아님
 ```bash
 BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git switch "$BASE" && git pull
-git branch -d feature/{이름}
+git fetch --prune                    # 원격에서 지워진 브랜치의 추적 ref 정리
+git branch -d feature/{이름}          # --delete-branch 가 이미 지웠으면 없다고 나온다
 ```
 
 ## 6. 지식 위키 반영
