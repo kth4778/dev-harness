@@ -5,77 +5,25 @@
 # 2026-08-09에 commit-guard 쪽 커밋 감지에서 구멍(`git -C <경로> commit`이
 # 그냥 통과)을 고쳤는데, 복사본이 있는 secret-guard는 그대로 새고 있었다.
 # 2026-08-11에 그 사실이 드러나 여기로 합쳤다. 고칠 자리를 하나로 둔다.
+#
+# ── `-a` 판정을 버린 이유 (2026-08-11) ───────────────────────────
+#
+# 한때 `git commit -a` 인지 가려내 검사 범위를 좁혔다. 그 판정을 정규식으로
+# 맞히려다 **다섯 라운드 연속 실패**했다. 봇 리뷰가 매번 새 셸 문법을 찾아냈다.
+#
+#   -m "-a" · -"a" · '-'a · foo\;bar · $'foo;bar' · $(git commit -am x)
+#   -mbar · \x-a · -qm "…-a…" · --template=foo-m
+#
+# 심각도 P1(막아야 할 것이 통과)이 라운드마다 3 → 1 → 2 → 3 으로 **줄지 않았다.**
+# 셸 인용 규칙은 조합이 사실상 무한하고, 정규식으로 뒤쫓는 한 늘 한 발 뒤다.
+#
+# **그래서 맞히기를 그만두고 넓게 본다.** 커밋될 수 있는 것을 전부 검사하면
+# 판정이 틀릴 자리 자체가 없어진다. 거짓 통과(P1)는 히스토리에 남아 되돌려도
+# 안 지워지지만, 거짓 차단은 사람이 그 자리에서 알아채고 고칠 수 있다.
 
 # 개행을 눌러 한 줄로 만든다. 개행을 이용한 우회를 막는다.
 flatten_command() {
     printf '%s' "$1" | tr '\n' ' '
-}
-
-# 따옴표 안 텍스트를 버린다. 단, 따옴표 안이 통째로 플래그 하나면 벗겨서 살린다.
-#
-# 이 자리에서 두 번 헛짚었다(2026-08-11).
-#
-#   1. 따옴표 안을 통째로 버렸다 → `git commit "-a" -m x` 가 샜다.
-#      셸은 `"-a"` 를 git 에 `-a` 로 그대로 넘긴다 (codex, PR #22)
-#   2. 그래서 `-m` 값만 골라 지우고 나머지 따옴표를 벗겼다 → 메시지가 노출됐다.
-#      `-qm "docs: -a 옵션"` 의 `-qm` 은 `-m` 패턴에 안 걸려 메시지가 남고,
-#      따옴표만 벗겨지자 본문의 `-a` 가 진짜 플래그로 읽혔다 (claude, PR #23)
-#
-#   3. 모양만 봤다 → `git commit -m "-a"` 가 샜다. 메시지가 하필 플래그
-#      모양이면 살려 버린다 (codex, PR #24)
-#
-# 그래서 단을 나눈다. 순서가 곧 우선순위다.
-#
-#   0단. 이스케이프 시퀀스(`\"`·`\;`·`\&`)를 통째로 치운다. 셸은 이것들을
-#        문자로 넘기지 구분자로 안 쓴다
-#   1단. 인자를 먹는 옵션의 값은 따옴표가 있든 없든 버리고 자리표시자를 남긴다.
-#        옵션 이름을 열거하지 않고 `-`로 시작해 `m`으로 끝나는 모양으로 잡아
-#        묶음 플래그(`-qm`·`-vam`)까지 담는다. 이름은 남긴다 —
-#        `-qam` 처럼 이름 안에 `a` 가 든 경우가 있다
-#   2단. 토큰에 붙은 따옴표는 벗겨서 잇는다. 셸이 `-"a"` 를 `-a` 로 넘긴다
-#   3단. 홀로 선 플래그 모양 따옴표도 벗겨 살린다
-#   4단. 나머지 따옴표 블록은 버린다
-#
-# 자리표시자(X)가 필요한 이유: 1단이 값을 지우고 옵션 이름만 남기면, 값 없는
-# 옵션 뒤의 **다음 토큰**을 2단이 값으로 먹는다. `-m "…" -a` 의 `-a` 가 그렇게
-# 사라졌다.
-#
-# 0단이 필요한 이유: `-m "say \"x; y\"" -a` 처럼 escape 가 끼면 따옴표 짝이
-# 어긋나 블록이 일찍 끊기고, 메시지 속 `;` 가 명령 구분자로 노출돼 뒤따르는
-# 진짜 `-a` 가 통째로 잘려 나갔다 (codex, PR #24·#25).
-strip_quoted_text() {
-    local esc; esc=$(printf '\001')
-    printf '%s' "$1" \
-        | sed -E "s/\\\\[^[:space:]]/$esc/g" \
-        | sed -E '
-            s/(^|[[:space:]])(-[A-Za-z]*m|--message|-F|--file)([[:space:]]*=?[[:space:]]*)("[^"]*"|'\''[^'\'']*'\'')/\1\2 X/g
-            s/(^|[[:space:]])(-[A-Za-z]*m|--message|-F|--file)([[:space:]]+)[^[:space:];&|]+/\1\2 X/g
-            s/([^[:space:]"'\''])"([^"]*)"/\1\2/g
-            s/([^[:space:]"'\''])'\''([^'\'']*)'\''/\1\2/g
-            s/"(-{1,2}[A-Za-z][A-Za-z0-9-]*)"/\1/g
-            s/'\''(-{1,2}[A-Za-z][A-Za-z0-9-]*)'\''/\1/g
-            s/"[^"]*"//g
-            s/'\''[^'\'']*'\''//g
-        ' \
-        | tr -d "$esc"
-}
-
-# 커밋 명령이 든 조각만 남긴다.
-#
-# Bash 도구는 명령을 여러 개 이어 보낸다. 전체 문자열에서 플래그를 찾으면
-# 뒤따르는 남의 인자를 커밋 옵션으로 읽는다 — `git commit -m ok && printf x "-a"`가
-# -a 커밋으로 판정돼 워킹트리 전체를 검사하고 엉뚱한 것을 막았다.
-# 2026-08-11 codex 리뷰(PR #23)가 잡았다.
-#
-# 따옴표 안을 먼저 버린 뒤에 쪼갠다. 커밋 메시지 본문에 든 `;`·`&&`로 조각이
-# 잘못 갈라지는 것을 막는다.
-commit_segment() {
-    local bare; bare=$(strip_quoted_text "$1")
-    # `|| [ -n "$seg" ]` 가 없으면 개행 없이 끝나는 마지막 조각을 버린다.
-    # 명령이 하나뿐일 때가 바로 그 경우라 판정이 통째로 죽는다.
-    printf '%s' "$bare" | sed -E 's/(&&|\|\||;|\|)/\n/g' | while IFS= read -r seg || [ -n "$seg" ]; do
-        is_commit_command " $seg " && printf '%s ' "$seg"
-    done
 }
 
 # 커밋 명령인가.
@@ -84,22 +32,12 @@ commit_segment() {
 # `git --no-pager commit`처럼 사이에 옵션이 끼면 통째로 안 걸린다.
 # 옵션은 순서가 자유롭고(`git --no-pager -C <경로> commit`), `-C`·`-c`는 뒤에
 # 인자를 하나 더 먹는다. 그래서 「인자를 먹는 옵션」을 먼저 놓고 반복시킨다.
+#
+# 여기는 **넓게 잡아도 안전하다.** 커밋이 아닌 것을 커밋으로 봐야 검사를 한 번
+# 더 도는 것뿐이다. 그래서 따옴표 안이든 명령 치환 안이든 그대로 훑는다.
 is_commit_command() {
     printf '%s' "$1" | grep -Eq \
-        '(^|[;&|[:space:]])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
-}
-
-# `git commit -a`처럼 스테이징을 건너뛰고 커밋하는가.
-#
-# 이 경우 인덱스에 없는 변경까지 커밋에 들어간다. 인덱스만 검사하는 훅은
-# 그 변경을 통째로 못 본다.
-#
-# `-a`·`--all`·묶음 플래그(`-am`)를 본다. `--amend`는 `--`로 시작하므로
-# 묶음 플래그 갈래에 걸리지 않는다.
-commit_stages_all() {
-    local seg; seg=$(commit_segment "$1")
-    [ -n "$seg" ] || return 1
-    printf ' %s ' "$seg" | grep -Eq '[[:space:]]-[a-zA-Z]*a[a-zA-Z]*([[:space:]]|$)|[[:space:]]--all([[:space:]]|$)'
+        '(^|[;&|[:space:]("`])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
 }
 
 # 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.
@@ -135,71 +73,61 @@ cd_to_target_repo() {
     return 0
 }
 
-# 이 커밋에 실제로 들어갈 파일 목록. 경로는 저장소 루트 기준이다.
+# 인덱스에 올라온 파일. 경로는 저장소 루트 기준이다.
 #
-# 평소에는 인덱스에 올라온 것만이다. `-a`가 붙으면 추적 중인 파일의 워킹트리
-# 수정까지 함께 커밋되므로 그것도 목록에 넣는다.
-#
-# 거르는 것은 삭제(`d`)뿐이다. 타입을 하나씩 적어(ACM) 두면 적지 않은 타입이
-# 조용히 빠진다 — 이름이 바뀐 파일(`R`)이 그렇게 샜다. `git mv ordinary CLAUDE.md`가
-# 규칙 9 검사를 그냥 지나갔다. 2026-08-11 codex 리뷰(PR #22)가 잡았다.
-#
-# `core.quotePath=false`를 붙이는 이유: 기본값이면 비ASCII 이름을 `"\352\262..."`
-# 처럼 따옴표+8진수로 뱉는다. 그 표기는 어떤 경로 패턴과도 안 맞아 검사에서
-# 통째로 빠진다. 2026-08-11 codex 리뷰(PR #23)가 잡았다.
-committed_files() {
-    if commit_stages_all "$1"; then
-        git -c core.quotePath=false diff HEAD --name-only --diff-filter=d 2>/dev/null
-    else
-        git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
-    fi
+# 거르는 것은 삭제(`d`)뿐이다. 담을 타입을 하나씩 적어(ACM) 두면 적지 않은
+# 타입이 조용히 빠진다 — 이름이 바뀐 파일(`R`)이 그렇게 샜다.
+# `core.quotePath=false`가 없으면 비ASCII 이름을 8진수로 뱉어 검사에서 빠진다.
+staged_files() {
+    git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
 }
 
-# 이 커밋이 그 파일에 기록할 권한 모드(100644 / 100755). 모르면 빈 출력.
+# 이 커밋에 들어갈 **수 있는** 파일. 인덱스 + 추적 파일의 워킹트리 변경.
 #
-# 평소에는 인덱스에 든 모드가 그대로 기록된다. 그런데 `core.fileMode=true`인
-# 저장소에서 `-a`로 커밋하면 **워킹트리의 실행 비트 변경까지 그때 함께
-# 스테이징된다** — 인덱스만 보면 아직 옛 모드라 바뀔 것을 못 본다.
-# 2026-08-11 codex 리뷰(PR #23)가 잡았다.
-#
-# pathspec에 `:/`를 붙이는 이유: 목록의 경로는 저장소 루트 기준인데 pathspec은
-# cwd 기준으로 풀린다. 하위 폴더에서 커밋하면 아무것도 안 맞아 모드가 빈
-# 문자열이 되고, 비교가 늘 거짓이라 **검사가 통째로 조용히 통과했다.**
-# committed_content 에서 고친 것과 같은 종류를 여기에 다시 심었던 것을
-# 2026-08-11 claude 리뷰(PR #23)가 잡았다.
-committed_mode() {
-    local flat="$1" f="$2" root
-    # `--bool` 로 읽는다. 날문자열로 비교하면 `no`·`0`·`False` 같은 다른 표기를
-    # 참으로 읽는다 (codex, PR #24).
-    if commit_stages_all "$flat" && [ "$(git config --bool --get core.fileMode 2>/dev/null)" != "false" ]; then
-        root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
-        # git 은 **소유자** 실행 비트만 본다. `[ -x ]` 는 실효 권한이라 root 로
-        # 다루는 저장소(컨테이너가 흔하다)에서는 0654 같은 모드도 참이 된다 —
-        # git 은 그것을 100644 로 기록하는데 훅은 100755 로 예측했다
-        # (codex, PR #25). ls 출력의 4번째 글자가 소유자 실행 비트다.
-        case "$(ls -ld "$root/$f" 2>/dev/null)" in
-            ???[xs]*) printf '100755' ;;
-            *)        printf '100644' ;;
-        esac
-    else
-        git ls-files -s -- ":/$f" 2>/dev/null | awk '{print $1}'
-    fi
+# `-a` 인지 가리지 않고 둘 다 담는다. 위의 「`-a` 판정을 버린 이유」 참고.
+committable_files() {
+    git -c core.quotePath=false diff HEAD --name-only --diff-filter=d 2>/dev/null
 }
 
-# 커밋에 들어갈 그 파일의 내용을 뱉는다.
+# 그 파일에서 검사할 내용. 인덱스 쪽과 워킹트리 쪽을 **둘 다** 뱉는다.
 #
-# `-a`가 붙으면 워킹트리 쪽이 커밋된다. 아니면 인덱스 쪽이다 — 스테이징한 뒤
-# 파일을 고치면 둘이 어긋나고, 커밋에 들어가는 것은 인덱스 쪽이다.
+# 어느 한쪽만 보면 샌다. 스테이징한 뒤 워킹트리에서 지우면 인덱스에 남아 있고,
+# 스테이징 없이 고치면 워킹트리에만 있다. 커밋 명령의 모양에 따라 어느 쪽이
+# 커밋될지 갈리는데, 그 모양을 맞히는 것을 그만뒀으므로 둘 다 본다.
 #
 # 워킹트리를 읽을 때 저장소 루트를 앞에 붙인다. 목록의 경로가 루트 기준인데
 # 훅의 cwd는 하위 폴더일 수 있다 — `sub/`에서 커밋하면 `sub/sub/config`를
-# 찾다가 아무것도 못 읽고 조용히 통과했다. 2026-08-11 codex 리뷰가 잡았다.
-committed_content() {
-    local flat="$1" f="$2" root
-    if commit_stages_all "$flat"; then
+# 찾다가 아무것도 못 읽고 조용히 통과했다.
+committable_content() {
+    local f="$1" root
+    git show ":$f" 2>/dev/null
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+    [ -f "$root/$f" ] && cat "$root/$f" 2>/dev/null
+    return 0
+}
+
+# 그 파일이 실행 가능한 모드로 기록될 상태인가. 아니면 1.
+#
+# 커밋될 모드를 예측하지 않는다 — `-a` 여부에 달려 있고 그것을 안 맞히기로
+# 했다. 대신 **둘 중 하나라도 실행 불가면 막는다.** 인덱스가 100644 면 평범한
+# 커밋이 그대로 기록하고, `core.fileMode=true` 에서 워킹트리 비트가 없으면
+# `-a` 커밋이 그것을 기록한다.
+#
+# git 은 **소유자** 실행 비트만 본다. `[ -x ]` 는 실효 권한이라 root 로 다루는
+# 저장소(컨테이너가 흔하다)에서는 0654 같은 모드도 참이 된다.
+# ls 출력의 4번째 글자가 소유자 실행 비트다.
+is_executable_commit() {
+    local f="$1" root mode
+    mode=$(git ls-files -s -- ":/$f" 2>/dev/null | awk '{print $1}')
+    [ -n "$mode" ] && [ "$mode" != "100755" ] && return 1
+
+    if [ "$(git config --bool --get core.fileMode 2>/dev/null)" != "false" ]; then
         root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
-        [ -f "$root/$f" ] && cat "$root/$f" 2>/dev/null
-    else
-        git show ":$f" 2>/dev/null
+        case "$(ls -ld "$root/$f" 2>/dev/null)" in
+            ???[xs]*) : ;;
+            "")       : ;;   # 워킹트리에 없다 — 인덱스 쪽 판정을 따른다
+            *)        return 1 ;;
+        esac
     fi
+    return 0
 }

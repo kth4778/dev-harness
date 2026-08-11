@@ -21,7 +21,7 @@ r 2 "$(sg '"git commit \"-a\" -m test"')"      'git commit "-a" -m test'
 r 2 "$(sg "\"git commit '--all' -m test\"")"    "git commit '--all' -m test"
 fresh
 printf '%s\n' "$AWS_FAKE" >> base.txt
-r 0 "$(sg '"git commit -m \"-a 옵션 이야기\""')" '[대조] 메시지 속 -a 는 여전히 플래그가 아니다'
+r 2 "$(sg '"git commit -m \"-a 옵션 이야기\""')" '메시지 모양과 무관하게 워킹트리를 본다'
 
 echo "── P1-2: 이름이 바뀐 파일 (diff type R) ──"
 fresh

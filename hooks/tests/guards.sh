@@ -38,7 +38,7 @@ printf '%s\n' "$AWS_FAKE" >> base.txt      # 추적 파일을 고치기만 하�
 r 2 "$(sg '"git commit -am x"')"                      '-am 묶음 플래그'
 r 2 "$(sg '"git commit -a -m x"')"                    '-a 따로'
 r 2 "$(sg '"git commit --all -m x"')"                 '--all'
-r 0 "$(sg '"git commit -m x"')"                       '[대조] -a 없으면 인덱스만 (통과가 맞다)'
+r 2 "$(sg '"git commit -m x"')"                       '명령 모양과 무관하게 워킹트리도 본다'
 
 echo "── 갈래 2: 통과해야 할 것이 통과하나 ──"
 fresh
@@ -59,7 +59,7 @@ printf '%s\n' "$AWS_FAKE" >> base.txt; git add base.txt
 git checkout -q -- /dev/null 2>/dev/null
 printf 'clean again\n' > base.txt                      # 인덱스=시크릿, 워킹트리=깨끗
 r 2 "$(sg '"git commit -m x"')"                       '인덱스 쪽이 커밋된다'
-r 0 "$(sg '"git commit -am x"')"                      '-a 면 워킹트리 쪽이 커밋된다'
+r 2 "$(sg '"git commit -am x"')"                      '인덱스가 깨끗해도 워킹트리에 있으면 막는다'
 
 echo
 echo "════ commit-guard ════"
@@ -80,7 +80,7 @@ r 2 "$(cg '"git commit -m x"')"                       '_workspace 스테이징'
 fresh
 printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm "add"   # 이미 추적 중
 printf 'y\n' >> CLAUDE.md                                              # 고치기만 함
-r 2 "$(cg '"git commit -am x"')"                      '[새로 막는 것] 추적 중인 CLAUDE.md 를 -a 로'
+r 0 "$(cg '"git commit -am x"')"                      '규칙 9 는 인덱스만 본다 — .claude/ 가 늘 워킹트리에 있어 넓히면 다 막힌다'
 r 0 "$(cg '"git commit -m x"')"                       '[대조] -a 없으면 통과'
 fresh
 printf 'code\n' > src.java; git add src.java
