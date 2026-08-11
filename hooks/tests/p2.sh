@@ -89,6 +89,32 @@ fresh; printf 'x\n' > CLAUDE.md; git add -f CLAUDE.md; git commit -qm add
 printf 'y\n' >> CLAUDE.md
 r 0 "$(cg '"git commit -am x"')"                                       '추적 중인 CLAUDE.md 수정은 인덱스에 없으면 통과'
 
+
+echo "── 봇 4차 지적 (PR #27) ──"
+# P1: 스테이징한 뒤 워킹트리를 HEAD 로 되돌리면 git diff HEAD 에서 사라진다.
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt; git add base.txt
+git checkout-index -f -- base.txt 2>/dev/null || true
+printf 'base\n' > base.txt                             # 워킹트리는 HEAD 와 같게
+r 2 "$(sg '"git commit -m x"')"                        'P1 인덱스에만 있는 시크릿'
+# P1: HEAD 가 없는 저장소의 최초 커밋.
+rm -rf "$R"; mkdir -p "$R"; cd "$R" || exit 1
+git init -q -b feature/x .; git config user.email t@t.t; git config user.name t
+git config core.fileMode false; mkdir -p hooks
+printf '%s\n' "$AWS_FAKE" > leak.txt; git add leak.txt
+r 2 "$(sg '"git commit -m first"')"                    'P1 최초 커밋(HEAD 없음)'
+printf '#!/usr/bin/env bash\n' > hooks/h5; git add hooks/h5
+r 2 "$(cg '"git commit -m first"')"                    'P1 최초 커밋의 100644 훅'
+# P2: 훅이 심볼릭 링크로 바뀌면 git 은 120000 으로 기록한다.
+fresh true
+printf '#!/usr/bin/env bash\n' > hooks/real; chmod +x hooks/real
+git add hooks/real; git commit -qm add
+rm hooks/real; ln -s /nonexistent hooks/real
+r 2 "$(cg '"git commit -am x"')"                       'P2 훅이 심볼릭 링크로 바뀌었다'
+# P2: 따옴표 안의 글자는 실행되지 않는다.
+fresh; git checkout -q -b main 2>/dev/null || git branch -qm main
+r 0 "$(cg '"echo \"git commit \""')"                   'P2 echo 안의 git commit 은 실행이 아니다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

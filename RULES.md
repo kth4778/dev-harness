@@ -283,8 +283,12 @@ bash probe-pr-guard.sh
 
 ```bash
 hooks/tests/run-all.sh                    # 지금 훅
-git show <옛커밋>:hooks/<이름> > /tmp/old/<이름>
-hooks/tests/run-all.sh /tmp/old           # 옛 판본에 같은 시험을 먹인다
+
+# 옛 판본에 같은 시험을 먹인다. 훅 하나만 꺼내면 안 된다 — 러너가 훅 전부와
+# 디스패처·공용 lib 를 다 부르므로 없는 파일에서 exit 127 이 쏟아진다.
+OLD=$(mktemp -d)
+git archive <옛커밋> hooks | tar -x -C "$OLD"
+hooks/tests/run-all.sh "$OLD/hooks"
 ```
 
 **고친 것에는 시험을 하나 보탠다.** 구멍을 찾았다는 것은 그 갈래를 아무도

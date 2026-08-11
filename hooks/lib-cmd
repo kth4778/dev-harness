@@ -33,11 +33,14 @@ flatten_command() {
 # 옵션은 순서가 자유롭고(`git --no-pager -C <경로> commit`), `-C`·`-c`는 뒤에
 # 인자를 하나 더 먹는다. 그래서 「인자를 먹는 옵션」을 먼저 놓고 반복시킨다.
 #
-# 여기는 **넓게 잡아도 안전하다.** 커밋이 아닌 것을 커밋으로 봐야 검사를 한 번
-# 더 도는 것뿐이다. 그래서 따옴표 안이든 명령 치환 안이든 그대로 훑는다.
+# 명령 치환(`$(…)`·백틱) 안의 커밋도 잡는다. 셸이 그것을 실제로 실행한다.
+#
+# 다만 `"` 는 시작 문자에 넣지 않는다. 넣었더니 `echo "git commit "` 같은
+# 평범한 출력까지 커밋으로 읽어 보호 브랜치에서 막혔다 (codex, PR #27).
+# `out="$(git commit -am x)"` 는 `git` 앞이 `(` 라 그것만으로 잡힌다.
 is_commit_command() {
     printf '%s' "$1" | grep -Eq \
-        '(^|[;&|[:space:]("`])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
+        '(^|[;&|[:space:](`])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
 }
 
 # 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.
@@ -78,15 +81,29 @@ cd_to_target_repo() {
 # 거르는 것은 삭제(`d`)뿐이다. 담을 타입을 하나씩 적어(ACM) 두면 적지 않은
 # 타입이 조용히 빠진다 — 이름이 바뀐 파일(`R`)이 그렇게 샜다.
 # `core.quotePath=false`가 없으면 비ASCII 이름을 8진수로 뱉어 검사에서 빠진다.
+# HEAD 가 없는 저장소(최초 커밋)에서는 인덱스 전체가 그대로 커밋된다.
+# `git diff --cached` 는 그 상태에서 아무것도 못 뱉어 검사가 통째로 비었다.
 staged_files() {
-    git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
+    if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+        git -c core.quotePath=false diff --cached --name-only --diff-filter=d 2>/dev/null
+    else
+        git -c core.quotePath=false ls-files --cached 2>/dev/null
+    fi
 }
 
-# 이 커밋에 들어갈 **수 있는** 파일. 인덱스 + 추적 파일의 워킹트리 변경.
+# 이 커밋에 들어갈 **수 있는** 파일. 인덱스 ∪ 추적 파일의 워킹트리 변경.
 #
 # `-a` 인지 가리지 않고 둘 다 담는다. 위의 「`-a` 판정을 버린 이유」 참고.
+#
+# `git diff HEAD` 로 갈음하면 안 된다. 그것은 합집합이 아니라 HEAD↔워킹트리
+# 비교라, **시크릿을 스테이징한 뒤 워킹트리를 HEAD 로 되돌리면 목록에서
+# 사라진다** — 평범한 `git commit` 이 그 시크릿을 그대로 기록하는데도.
+# 2026-08-11 codex·claude 리뷰(PR #27)가 나란히 잡았다.
 committable_files() {
-    git -c core.quotePath=false diff HEAD --name-only --diff-filter=d 2>/dev/null
+    {
+        staged_files
+        git -c core.quotePath=false diff --name-only --diff-filter=d 2>/dev/null
+    } | sort -u
 }
 
 # 그 파일에서 검사할 내용. 인덱스 쪽과 워킹트리 쪽을 **둘 다** 뱉는다.
@@ -123,9 +140,17 @@ is_executable_commit() {
 
     if [ "$(git config --bool --get core.fileMode 2>/dev/null)" != "false" ]; then
         root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+        # 워킹트리에 없으면 인덱스 쪽을 따른다. `-L` 을 함께 보는 이유는
+        # 끊긴 심볼릭 링크에서 `-e` 가 거짓이기 때문이다 — 링크는 엄연히 있고
+        # git 은 그것을 120000 으로 기록한다.
+        [ -e "$root/$f" ] || [ -L "$root/$f" ] || return 0
+        # 정규 파일이어야 한다. 심볼릭 링크는 git 이 120000 으로 기록하는데
+        # `ls -ld` 가 `lrwxr-xr-x` 를 뱉어 실행 가능으로 보인다. 링크가 끊겨
+        # 있으면 클론한 사람에게 훅이 아예 없는 것과 같다
+        # (codex, PR #27).
+        [ -f "$root/$f" ] && [ ! -L "$root/$f" ] || return 1
         case "$(ls -ld "$root/$f" 2>/dev/null)" in
             ???[xs]*) : ;;
-            "")       : ;;   # 워킹트리에 없다 — 인덱스 쪽 판정을 따른다
             *)        return 1 ;;
         esac
     fi
