@@ -102,7 +102,7 @@ ls _archive/$SLUG/      # agents skills workspace 가 있어야 한다
 ### 5. gitignore를 점검한다
 
 ```bash
-git status --porcelain | grep -E '\.claude|_workspace|_archive|CLAUDE\.md'
+git status --porcelain | grep -E '\.claude|\.harness|_workspace|_archive|CLAUDE\.md'
 ```
 
 **결과가 비어야 한다.** 나오면 `.gitignore`에 빠진 항목이 있다.

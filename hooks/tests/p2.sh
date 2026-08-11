@@ -68,6 +68,27 @@ r 0 "$(sg '"git commit -qm \"docs: -a 옵션 설명\""')" '묶음 플래그 -qm 
 r 0 "$(sg '"git commit -m \"note: \\\"quoted\\\" -a leaks\""')" '메시지 속 이스케이프 따옴표 뒤 -a'
 r 2 "$(sg '"git commit -qam x"')"                    '[대조] -qam 은 진짜 -a 다'
 
+
+echo "── codex 2차 지적 (PR #24) ──"
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt                # 워킹트리에만
+printf 'clean\n' > ok.txt; git add ok.txt            # 커밋될 것은 깨끗
+r 0 "$(sg '"git commit -m \"-a\""')"                 '메시지가 정확히 -a 모양이어도 플래그가 아니다'
+r 0 "$(sg '"git commit -qm \"--all\""')"             '묶음 플래그 뒤 메시지가 --all 모양'
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt                # 워킹트리에만, -a 로 커밋될 것
+r 2 "$(sg '"git commit -m \"say \\\"x; y\\\"\" -a"')" '이스케이프 따옴표 속 세미콜론 뒤의 진짜 -a'
+# core.fileMode 가 false 면 git 은 워킹트리 비트를 무시한다. 인덱스에 100644 로
+# 든 훅은 워킹트리가 실행 가능해도 100644 로 커밋된다 — 막아야 한다.
+# `no`·`0`·`False` 를 참으로 읽으면 워킹트리 쪽(100755)을 보고 통과시킨다.
+fresh
+printf '#!/usr/bin/env bash\n' > hooks/h4
+git add hooks/h4; git commit -qm add                 # 인덱스에 100644
+git config core.fileMode no                          # false 의 다른 표기
+chmod +x hooks/h4                                    # 워킹트리만 실행 가능
+printf 'touch\n' >> hooks/h4                         # -a 가 담도록 내용도 바꾼다
+r 2 "$(cg '"git commit -am x"')"                     'core.fileMode=no 를 false 로 읽어야 100644 를 본다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

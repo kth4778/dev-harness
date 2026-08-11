@@ -21,16 +21,33 @@ flatten_command() {
 #      `-qm "docs: -a 옵션"` 의 `-qm` 은 `-m` 패턴에 안 걸려 메시지가 남고,
 #      따옴표만 벗겨지자 본문의 `-a` 가 진짜 플래그로 읽혔다 (claude, PR #23)
 #
-# 옵션 이름을 열거하는 한 묶음 플래그(`-qm`·`-vam`)가 계속 빠진다. 그래서
-# 열거를 버리고 **따옴표 안의 모양**으로 판정한다 — 플래그 한 개면 인자이고,
-# 문장이면 메시지다. 셸이 넘기는 것과 같은 기준이라 옵션 목록을 안 늘려도 된다.
+#   3. 모양만 봤다 → `git commit -m "-a"` 가 샜다. 메시지가 하필 플래그
+#      모양이면 살려 버린다 (codex, PR #24)
+#
+# 그래서 세 단으로 나눈다. 순서가 곧 우선순위다.
+#
+#   1단. 인자를 먹는 옵션 뒤의 따옴표 블록은 무조건 버린다.
+#        옵션 이름을 열거하지 않고 `-`로 시작해 `m`으로 끝나는 모양으로 잡아
+#        묶음 플래그(`-qm`·`-vam`)까지 담는다
+#   2단. 남은 것 중 플래그 한 개짜리는 벗겨 살린다 — 셸이 git 에 그대로 넘긴다
+#   3단. 나머지 따옴표 블록은 버린다
+#
+# 이스케이프된 따옴표는 맨 앞에서 치운다. `-m "say \"x; y\"" -a` 처럼 escape 가
+# 끼면 따옴표 짝이 어긋나 블록이 일찍 끊기고, 메시지 속 `;` 가 명령 구분자로
+# 노출돼 뒤따르는 진짜 `-a` 가 통째로 잘려 나갔다 (codex, PR #24).
 strip_quoted_text() {
-    printf '%s' "$1" | sed -E '
-        s/"(-{1,2}[A-Za-z][A-Za-z0-9-]*)"/\1/g
-        s/'\''(-{1,2}[A-Za-z][A-Za-z0-9-]*)'\''/\1/g
-        s/"[^"]*"//g
-        s/'\''[^'\'']*'\''//g
-    '
+    local esc; esc=$(printf '\001')
+    printf '%s' "$1" \
+        | sed -E "s/\\\\[\"']/$esc/g" \
+        | sed -E '
+            s/(-[A-Za-z]*m|--message|-F|--file)([[:space:]]*=?[[:space:]]*)"[^"]*"/\1\2/g
+            s/(-[A-Za-z]*m|--message|-F|--file)([[:space:]]*=?[[:space:]]*)'\''[^'\'']*'\''/\1\2/g
+            s/"(-{1,2}[A-Za-z][A-Za-z0-9-]*)"/\1/g
+            s/'\''(-{1,2}[A-Za-z][A-Za-z0-9-]*)'\''/\1/g
+            s/"[^"]*"//g
+            s/'\''[^'\'']*'\''//g
+        ' \
+        | tr -d "$esc"
 }
 
 # 커밋 명령이 든 조각만 남긴다.
@@ -142,7 +159,9 @@ committed_files() {
 # 2026-08-11 claude 리뷰(PR #23)가 잡았다.
 committed_mode() {
     local flat="$1" f="$2" root
-    if commit_stages_all "$flat" && [ "$(git config --get core.fileMode)" != "false" ]; then
+    # `--bool` 로 읽는다. 날문자열로 비교하면 `no`·`0`·`False` 같은 다른 표기를
+    # 참으로 읽는다 (codex, PR #24).
+    if commit_stages_all "$flat" && [ "$(git config --bool --get core.fileMode 2>/dev/null)" != "false" ]; then
         root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
         if [ -x "$root/$f" ]; then printf '100755'; else printf '100644'; fi
     else
