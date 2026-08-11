@@ -17,11 +17,17 @@ H="${1:-$(cd "$here/.." && pwd)}"
 total_ok=0; total_fail=0
 for t in guards codex mode p2 pr-guard all; do
     printf '\n════════ %s ════════\n' "$t"
-    out=$(bash "$here/$t.sh" "$H" 2>&1)
+    out=$(bash "$here/$t.sh" "$H" 2>&1); st=$?
     printf '%s\n' "$out"
     ok=$(printf '%s' "$out"   | grep -c '\[OK ')
     bad=$(printf '%s' "$out"  | grep -c '\[FAIL')
     total_ok=$((total_ok + ok)); total_fail=$((total_fail + bad))
+    # 마커 없이 죽은 경우 — 문법 오류, source 실패, 이른 exit. 마커만 세면
+    # 이런 크래시가 "FAIL 0"으로 보여 suite 가 거짓 초록이 된다 (codex, PR #25).
+    if [ "$st" -ne 0 ] && [ "$bad" -eq 0 ]; then
+        printf '  [FAIL] %s.sh 가 마커 없이 exit %s 로 죽었다\n' "$t" "$st"
+        total_fail=$((total_fail + 1))
+    fi
 done
 
 printf '\n════════ 총계: OK %s / FAIL %s ════════\n' "$total_ok" "$total_fail"

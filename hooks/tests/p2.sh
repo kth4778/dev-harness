@@ -89,6 +89,21 @@ chmod +x hooks/h4                                    # 워킹트리만 실행 �
 printf 'touch\n' >> hooks/h4                         # -a 가 담도록 내용도 바꾼다
 r 2 "$(cg '"git commit -am x"')"                     'core.fileMode=no 를 false 로 읽어야 100644 를 본다'
 
+
+echo "── codex 3차 지적 (PR #25) ──"
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt                # 워킹트리에만, -a 로 커밋될 것
+r 2 "$(sg '"git commit -m foo\\;bar -a"')"         'P1 이스케이프된 세미콜론은 구분자가 아니다'
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt
+r 2 "$(sg '"git commit -\"a\" -m x"')"               'P1 부분 따옴표 -"a" 는 셸이 -a 로 잇는다'
+r 2 "$(sg '"git commit --\"all\" -m x"')"            'P1 부분 따옴표 --"all"'
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt                # 워킹트리에만
+printf 'clean\n' > ok.txt; git add ok.txt            # 커밋될 것은 깨끗
+r 0 "$(sg '"git commit -m -a"')"                     '따옴표 없는 -m 인자가 -a 모양'
+r 0 "$(sg '"git commit --message -a"')"              '따옴표 없는 --message 인자'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
