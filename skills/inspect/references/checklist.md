@@ -10,8 +10,11 @@ feature 브랜치인가. 베이스가 프로젝트 CLAUDE.md가 정한 대상인
 **head와 base 이름이 둘 다 ASCII인가.**
 
 ```bash
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE" | LC_ALL=C grep -n '[^ -~]'
+# BASE 를 덮어쓰지 마라 — SKILL.md 가 merge-base SHA 로 쓰고, 아래 판정들이
+# `$BASE..HEAD` 로 그것을 참조한다. 브랜치 이름으로 바꾸면 공통 조상이 아니라
+# 두 tip 을 비교하게 되어 upstream 변경이 검사 대상에 섞인다.
+BASE_BRANCH=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C grep -n '[^ -~]'
 ```
 
 **뭐라도 나오면 FAIL이다.** `anthropics/claude-code-action`이 **base** 이름을
@@ -21,18 +24,26 @@ head만 보면 안 보인다. 이 저장소의 리뷰 워크플로가 그 액션
 **이 브랜치로 PR이 이미 열렸던 적이 있는가.**
 
 ```bash
+OWNER=$(gh repo view --json owner -q .owner.login)
 gh pr list --state all --head "$(git rev-parse --abbrev-ref HEAD)" \
-  --json number,title,state -q '.[] | select(.state != "OPEN")'
+  --json number,title,state,headRepositoryOwner \
+  -q ".[] | select(.headRepositoryOwner.login == \"$OWNER\")"
 ```
 
-**결과가 나오면 FAIL이다.** 그 브랜치의 일은 이미 끝났다.
+**하나라도 나오면 FAIL이다.** 상태별로 이유가 다르다.
 
-- **머지됨** → 다시 쓰면 스택 PR이 되어 claude 리뷰가 아예 안 돈다
-- **닫힘** → 봇 지적을 받고 새 브랜치로 갈아탄 자리다(브랜치 동결). 되돌아가면
-  그 라운드가 다시 열린다
+| 상태 | 왜 FAIL인가 |
+|---|---|
+| `MERGED` | 다시 쓰면 스택 PR이 되어 claude 리뷰가 아예 안 돈다 |
+| `CLOSED` | 봇 지적을 받고 새 브랜치로 갈아탄 자리다. 되돌아가면 그 라운드가 다시 열린다 |
+| `OPEN` | 같은 브랜치에 또 push하면 **codex는 재리뷰를 안 하고 claude만 돈다.** 봇 둘이 서로 다른 커밋을 본 채 남는다(브랜치 동결) |
 
 `merged`만 보면 **닫힌 쪽을 통째로 놓친다.** 리뷰 한 라운드마다 닫힌 브랜치가
 하나씩 쌓이므로 이쪽이 오히려 흔하다.
+
+`headRepositoryOwner`로 거르는 이유: `--head`는 이름만 보고 저장소를 못 가린다.
+fork를 받는 저장소에서는 **남이 같은 이름으로 열었던 PR이 내 브랜치를 FAIL로
+만든다.**
 
 통합 브랜치에서 새 브랜치를 파고 옮긴다.
 

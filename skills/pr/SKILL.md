@@ -190,8 +190,12 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git switch "$BASE" && git pull
 git fetch --prune                    # 원격에서 지워진 브랜치의 추적 ref 정리
-git branch -d feature/{이름}          # --delete-branch 가 이미 지웠으면 없다고 나온다
 ```
+
+**`git branch -d`를 따로 부르지 않는다.** `--delete-branch`가 로컬까지 지웠으므로
+「branch not found」로 실패하고, 이 블록을 한 번에 돌리면 **블록 전체가 실패로
+보여 뒤따르는 위키 반영이 멈춘다.** 앞선 라운드에서 갈아탄 브랜치가 남아 있으면
+그때만 이름을 짚어 지운다.
 
 ## 6. 지식 위키 반영
 
