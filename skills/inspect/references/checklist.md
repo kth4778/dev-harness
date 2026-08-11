@@ -6,16 +6,34 @@
 git rev-parse --abbrev-ref HEAD
 ```
 feature 브랜치인가. 베이스가 프로젝트 CLAUDE.md가 정한 대상인가.
-이름이 ASCII인가 — 비ASCII base 브랜치는 claude 리뷰 잡을 죽인다.
 
-**이 브랜치로 열렸던 PR이 이미 머지됐는가.**
+**head와 base 이름이 둘 다 ASCII인가.**
 
 ```bash
-gh pr list --state merged --head "$(git rev-parse --abbrev-ref HEAD)" --json number,title
+BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE" | LC_ALL=C grep -n '[^ -~]'
 ```
 
-**결과가 나오면 FAIL이다.** 머지가 끝난 브랜치를 다시 쓰고 있다는 뜻이고,
-그대로 PR을 올리면 스택 PR이 되어 claude 리뷰가 아예 안 돈다.
+**뭐라도 나오면 FAIL이다.** `anthropics/claude-code-action`이 **base** 이름을
+검증하고 비ASCII를 거부한다 — 잡이 27초 만에 죽는다. base일 때만 터지므로
+head만 보면 안 보인다. 이 저장소의 리뷰 워크플로가 그 액션을 쓴다.
+
+**이 브랜치로 PR이 이미 열렸던 적이 있는가.**
+
+```bash
+gh pr list --state all --head "$(git rev-parse --abbrev-ref HEAD)" \
+  --json number,title,state -q '.[] | select(.state != "OPEN")'
+```
+
+**결과가 나오면 FAIL이다.** 그 브랜치의 일은 이미 끝났다.
+
+- **머지됨** → 다시 쓰면 스택 PR이 되어 claude 리뷰가 아예 안 돈다
+- **닫힘** → 봇 지적을 받고 새 브랜치로 갈아탄 자리다(브랜치 동결). 되돌아가면
+  그 라운드가 다시 열린다
+
+`merged`만 보면 **닫힌 쪽을 통째로 놓친다.** 리뷰 한 라운드마다 닫힌 브랜치가
+하나씩 쌓이므로 이쪽이 오히려 흔하다.
+
 통합 브랜치에서 새 브랜치를 파고 옮긴다.
 
 > 머지할 때 `--delete-branch`를 쓰면 이 상황 자체가 안 생긴다. 이 검사는
