@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# 훅 공통 — Bash 도구가 실행하려는 명령 문자열을 해석한다.
+#
+# commit-guard와 secret-guard가 같은 판정을 복붙으로 나눠 갖고 있었다.
+# 2026-08-09에 commit-guard 쪽 커밋 감지에서 구멍(`git -C <경로> commit`이
+# 그냥 통과)을 고쳤는데, 복사본이 있는 secret-guard는 그대로 새고 있었다.
+# 2026-08-11에 그 사실이 드러나 여기로 합쳤다. 고칠 자리를 하나로 둔다.
+
+# 개행을 눌러 한 줄로 만든다. 개행을 이용한 우회를 막는다.
+flatten_command() {
+    printf '%s' "$1" | tr '\n' ' '
+}
+
+# 따옴표로 감싼 부분을 빈 문자열로 지운다. 커밋 메시지 본문에 든 글자를
+# 진짜 옵션·경로로 읽는 오탐을 막는다 — `git commit -m "-a 옵션을 쓰지 마라"`가
+# 실제로 -a 로 읽히면 검사 범위가 엉뚱하게 넓어진다.
+strip_quoted() {
+    printf '%s' "$1" | sed -E 's/"[^"]*"/""/g; s/'\''[^'\'']*'\''/'\'\''/g'
+}
+
+# 커밋 명령인가.
+#
+# 문자열 "git commit"을 그대로 찾으면 안 된다 — `git -C <경로> commit`이나
+# `git --no-pager commit`처럼 사이에 옵션이 끼면 통째로 안 걸린다.
+# 옵션은 순서가 자유롭고(`git --no-pager -C <경로> commit`), `-C`·`-c`는 뒤에
+# 인자를 하나 더 먹는다. 그래서 「인자를 먹는 옵션」을 먼저 놓고 반복시킨다.
+is_commit_command() {
+    printf '%s' "$1" | grep -Eq \
+        '(^|[;&|[:space:]])git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
+}
+
+# `git commit -a`처럼 스테이징을 건너뛰고 커밋하는가.
+#
+# 이 경우 인덱스에 없는 변경까지 커밋에 들어간다. 인덱스만 검사하는 훅은
+# 그 변경을 통째로 못 본다.
+#
+# `-a`·`--all`·묶음 플래그(`-am`)를 본다. `--amend`는 `--`로 시작하므로
+# 묶음 플래그 갈래에 걸리지 않는다.
+commit_stages_all() {
+    local bare; bare=$(strip_quoted "$1")
+    printf '%s' "$bare" | grep -Eq '[[:space:]]-[a-zA-Z]*a[a-zA-Z]*([[:space:]]|$)|[[:space:]]--all([[:space:]]|$)'
+}
+
+# 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.
+#
+# 훅은 명령의 cwd가 아니라 세션 cwd에서 돈다. 그래서 다른 저장소를 향한
+# 명령까지 이 저장소 기준으로 판정한다 — 2026-08-09에 실제로 그렇게 막혔다.
+# 코드 저장소(main)에서 세션을 열고 위키 저장소의 feature 브랜치에 커밋하는데
+# "보호 브랜치에 직접 커밋"으로 차단됐다.
+#
+# 앞머리의 cd 를 먼저 본다. `git -C` 는 커밋 메시지 본문에도 나올 수 있어서
+# 뒤에 둔다 — 2026-08-09에 메시지에 적은 `git -C <경로>` 를 진짜 명령으로 읽고
+# 엉뚱한 경로로 판정한 적이 있다. 앞머리의 cd 는 그런 혼동이 없다.
+command_target_dir() {
+    local flat="$1" t
+    t=$(printf '%s' "$flat" | grep -oE '^[[:space:]]*cd[[:space:]]+("[^"]+"|[^[:space:]]+)' | head -1 \
+        | sed -E 's/^[[:space:]]*cd[[:space:]]+//; s/^"//; s/"$//')
+    if [ -z "$t" ]; then
+        t=$(printf '%s' "$flat" | grep -oE 'git[[:space:]]+-C[[:space:]]+("[^"]+"|[^[:space:]]+)' | head -1 \
+            | sed -E 's/^git[[:space:]]+-C[[:space:]]+//; s/^"//; s/"$//')
+    fi
+    printf '%s' "$t"
+}
+
+# 대상 저장소가 밝혀져 있으면 그리로 옮긴다. 그 경로가 저장소가 아니면
+# 옮기지 않는다 — 판정을 건너뛰는 것보다 세션 cwd로 판정하는 편이 안전하다.
+# 거짓 통과는 히스토리에 남아 되돌려도 안 지워진다.
+cd_to_target_repo() {
+    local t; t=$(command_target_dir "$1")
+    if [ -n "$t" ] && [ -d "$t" ] \
+            && git -C "$t" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        cd "$t" || return 1
+    fi
+    return 0
+}
+
+# 이 커밋에 실제로 들어갈 파일 목록.
+#
+# 평소에는 인덱스에 올라온 것만이다. `-a`가 붙으면 추적 중인 파일의 워킹트리
+# 수정까지 함께 커밋되므로 그것도 목록에 넣는다.
+committed_files() {
+    if commit_stages_all "$1"; then
+        git diff HEAD --name-only --diff-filter=ACM 2>/dev/null
+    else
+        git diff --cached --name-only --diff-filter=ACM 2>/dev/null
+    fi
+}
+
+# 커밋에 들어갈 그 파일의 내용을 뱉는다.
+#
+# `-a`가 붙으면 워킹트리 쪽이 커밋된다. 아니면 인덱스 쪽이다 — 스테이징한 뒤
+# 파일을 고치면 둘이 어긋나고, 커밋에 들어가는 것은 인덱스 쪽이다.
+committed_content() {
+    local flat="$1" f="$2"
+    if commit_stages_all "$flat"; then
+        [ -f "$f" ] && cat "$f" 2>/dev/null
+    else
+        git show ":$f" 2>/dev/null
+    fi
+}

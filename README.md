@@ -132,9 +132,17 @@ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git switch main"}}' \
 rm -f .harness/agents-running
 ```
 
-**훅 스크립트는 실행 권한 비트가 있어야 한다.** Windows에서 새로 만들면 git이
-`100644`로 기록한다 — `git update-index --chmod=+x hooks/<이름>`으로 세운다.
-이 기계에서는 로컬 파일이 실행 가능해 안 드러나고 **새로 클론한 사람에게만 터진다.**
+**훅 스크립트는 실행 권한 비트가 있어야 한다.** 새로 만들면 git이 `100644`로
+기록하는 경우가 있다 — Windows가 그렇고, **이 저장소는 맥에서도 그렇다.**
+`core.fileMode=false`라 `chmod +x`가 git에 반영되지 않는다.
+
+```bash
+git update-index --chmod=+x hooks/<이름>
+git ls-files -s hooks/          # 전부 100755 여야 한다
+```
+
+`chmod +x`만 하고 넘어가면 **로컬에서는 실행 가능해 안 드러나고 새로 클론한
+사람에게만 터진다.** 훅을 새로 넣을 때마다 `git ls-files -s`로 확인한다.
 
 ## 합격 테스트
 
@@ -189,7 +197,8 @@ CLAUDE.md
 
 ```
 RULES.md                          절대 규칙 10개 — 단일 원본
-hooks/                            8개 + 폴리글롯 디스패처 + 입력 파서
+hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
+                                  (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
