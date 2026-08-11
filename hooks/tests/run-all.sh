@@ -15,7 +15,7 @@ H="${1:-$(cd "$here/.." && pwd)}"
 # all(디스패처)도 목록에 넣는다. 빼 두면 그 결과가 총계에 안 잡혀
 # 디스패처가 깨져도 suite 가 통과한다 (codex, PR #24).
 total_ok=0; total_fail=0
-for t in guards codex mode p2 pr-guard reuse all; do
+for t in guards codex mode p2 pr-guard all; do
     printf '\n════════ %s ════════\n' "$t"
     out=$(bash "$here/$t.sh" "$H" 2>&1); st=$?
     printf '%s\n' "$out"

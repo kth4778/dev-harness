@@ -46,7 +46,7 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 **제목** + 워크플로우 + 2층 CLAUDE.md + 3층 **경로** 주입 |
 | `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
-| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · **머지된 브랜치 재사용**(2) · AI 파일 커밋(9) · 실행 비트 없는 훅 — 인덱스와 워킹트리를 **둘 다** 본다 |
+| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) · 실행 비트 없는 훅 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `secret-guard` | PreToolUse(Bash) | 시크릿(AWS 키·토큰·개인키)이 든 커밋 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
 | `stamp-guard` | PreToolUse(Bash) | 검토 도장 이후에 운영 코드가 바뀐 채로 `gh pr create` |
@@ -68,6 +68,21 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 |---|---|
 | `session-end-guard` (Stop) | 마감 안 했다고 턴 종료를 막았다. 막는 대상이 되돌릴 수 있는 것이고, 같은 사실을 다음 세션 시작 훅이 이미 알려준다 |
 | `commit-guard`의 테스트 검사 | 소스 수정 시각과 `build/test-results` 시각을 비교했다. 주석 한 줄만 고쳐도, Gradle이 up-to-date로 건너뛰어도 걸렸다 |
+
+### 넣었다가 뺀 것 (2026-08-11) — 머지된 브랜치 재사용 차단
+
+만들어 붙였다가 **두 라운드 만에 걷었다.** 위 기준을 스스로 어긴 사례라 남긴다.
+
+| 왜 뺐나 | |
+|---|---|
+| **커버리지가 좁다** | squash 머지 · fast-forward 머지 · 머지하며 브랜치 삭제 · single-branch clone — 전부 못 잡는다. 잡는 건 「no-ff + 브랜치 남김 + fetch됨」뿐이다 |
+| **판정이 수렴하지 않았다** | 두 라운드에 P1 5개. 「도달 가능」과 「머지됐다」를 로컬 git 상태로 가르는 것이 안 된다 |
+| **다른 검사를 위태롭게 했다** | 판정에 `git fetch`가 필요한데 시간 제한이 없다. origin이 안 닿으면 훅이 20초 timeout에 걸려 죽고 **규칙 9와 실행비트 검사가 아예 안 돈다** |
+| **사용자 상태를 오염시켰다** | 그 fetch가 `FETCH_HEAD`를 덮어써서, 사용자의 `git merge FETCH_HEAD`가 엉뚱한 것을 머지한다 |
+
+**막는 대상이 되돌릴 수 있는 것이었다.** 머지된 브랜치에 얹은 커밋은 로컬이고, push해도 브랜치를 지우면 정리된다. 위 기준을 그대로 적용하면 처음부터 훅 대상이 아니었다.
+
+규칙 자체는 살아 있다 — [RULES.md](RULES.md) 규칙 1에 글로 있다.
 
 규칙 2(테스트를 마친 커밋)는 사라진 게 아니라 **훅에서 사람의 판단으로
 옮겼다.** `inspect`가 커밋을 하나씩 체크아웃해 실제로 돌려본다.
@@ -204,7 +219,7 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                훅 시험 134개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                훅 시험 127개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
