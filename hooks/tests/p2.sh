@@ -55,6 +55,19 @@ printf '#!/usr/bin/env bash\n' > hooks/h2; git add hooks/h2
 git update-index --chmod=+x hooks/h2
 r 0 "$(cg '"git commit -m x"')"                     '100755 훅은 통과'
 
+
+echo "── claude 봇 지적 (PR #23) ──"
+fresh
+mkdir -p sub; printf '#!/usr/bin/env bash\n' > hooks/h3; git add hooks/h3   # 100644
+cd "$R/sub" || exit 1
+r 2 "$(cg "\"cd $R/sub && git commit -m x\"")"      '하위 폴더 cwd 에서 실행비트 검사'
+fresh
+printf '%s\n' "$AWS_FAKE" >> base.txt                # 워킹트리에만
+printf 'clean\n' > ok.txt; git add ok.txt            # 커밋될 것은 깨끗
+r 0 "$(sg '"git commit -qm \"docs: -a 옵션 설명\""')" '묶음 플래그 -qm 뒤 메시지 속 -a'
+r 0 "$(sg '"git commit -m \"note: \\\"quoted\\\" -a leaks\""')" '메시지 속 이스케이프 따옴표 뒤 -a'
+r 2 "$(sg '"git commit -qam x"')"                    '[대조] -qam 은 진짜 -a 다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
