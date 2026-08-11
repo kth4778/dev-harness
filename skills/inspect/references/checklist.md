@@ -43,7 +43,7 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config "branch.$BR.remote" \
   || echo origin)
 # git@host:owner/repo · https://host/owner/repo · ssh://git@host:22/owner/repo 를 다 받는다
-HEAD_OWNER=$(git remote get-url "$HEAD_REMOTE" \
+HEAD_OWNER=$(git remote get-url --push "$HEAD_REMOTE" \
   | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
 gh pr list --state all --head "$BR" --limit 100 \
   --json number,title,state,headRepositoryOwner \
@@ -85,7 +85,7 @@ git log --oneline "$BASE"..HEAD
 | 신호 | 무엇을 뜻하나 |
 |---|---|
 | 커밋 수가 하위 기능 수보다 **많다** | 리뷰 왕복이 접히지 않았다 |
-| 구현만 있는 커밋 · 테스트만 있는 커밋 | 갈라진 것이다 → 하나로 합친다. 아래 TDD 검사와 같은 판정이다 |
+| 구현만 있는 커밋 · 테스트만 있는 커밋 | 갈라진 것이다 → 하나로 합친다. 아래 TDD 검사와 같은 판정이다. **리팩터·문서 커밋은 예외** — 검증할 새 동작이 없다(규칙 2) |
 | 같은 파일·같은 함수를 **세 번 이상** 건드린 커밋들 | 한 자리를 여러 번 고쳤다 → 최종 형태로 접는다 |
 | `chore: …켠다` ↔ `…끈다` 처럼 **상쇄하는 쌍** | 둘 다 아무것도 안 한 것이다 → 접는다 |
 | `test: …통과하던 것을 막는다` | 헛통과를 뒤늦게 막은 것 → 원래 `test:` 커밋에 흡수 |
@@ -100,7 +100,7 @@ git log --format=%H "$BASE"..HEAD | while read -r c; do git show --name-only --f
 (force push가 봇 리뷰를 떠 버린다) 첫 push 전인 이 자리가 마지막 기회다.
 
 2026-08-11 실측: PokeClip PR #34에 커밋 51개가 들어갔고 하위 기능은 12개였다.
-**차이 27개가 리뷰 왕복이다.** 이 검사가 없어서 그대로 머지됐다.
+**차이 39개가 리뷰 왕복이다.** 이 검사가 없어서 그대로 머지됐다.
 
 **접은 뒤 테스트를 다시 돌린다** — 접힌 조합으로는 한 번도 안 돌아봤다.
 

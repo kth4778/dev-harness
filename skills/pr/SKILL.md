@@ -159,7 +159,7 @@ claudecode 워크플로는 `synchronize`를 트리거에서 빼 뒀다
 **라운드가 여럿이면 마지막 PR 하나만 머지한다.** 브랜치가 앞의 것 위에 쌓여 있어
 그 안에 전부 들어 있다. 앞 PR들은 이미 닫혀 있어야 한다.
 
-### 🔴 PR을 올리기 전에 왕복한 이력을 접는다
+### 🔴 접힌 이력인지 먼저 확인한다 (접기 자체는 Phase 5에서 끝난다)
 
 **남길 단위는 하위 기능 하나당 커밋 하나다**(규칙 2). 기능과 그것을 검증하는
 테스트가 **같은 커밋**에 들어간다 — 갈라면 `inspect`의 TDD 검사가 구현만 있는
@@ -216,7 +216,8 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > ```bash
 > gh pr merge <N> --merge                      # 큐에 넣는다
 > gh pr view <N> --json state -q .state        # MERGED 가 될 때까지 기다린다
-> git push origin --delete <브랜치>
+> git push origin --delete <브랜치>            # 원격
+> git branch -D <브랜치>                       # 로컬 — 이것도 안 지워져 있다
 > ```
 
 **스쿼시는 커밋 전부를 한 줄로 접는다.** 그러면 두 가지가 같이 사라진다.
