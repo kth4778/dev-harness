@@ -171,10 +171,15 @@ FAIL을 내고, 그 자리에서 접는다 — 여기(Phase 6)에 오면 이미 
 PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기회다.
 
 ```bash
-git log --oneline "$BASE"..HEAD          # 지금 몇 개인가
-git rebase -i "$BASE"                    # 접는다
-./gradlew test                           # 접힌 조합으로 다시 돌린다
+git log --oneline "$BASE"..HEAD          # 세어만 본다
 ```
+
+**여기서 `rebase`를 돌리지 마라.** 이 자리는 PR을 올리고 봇 리뷰를 받은 뒤다 —
+고쳐 쓰면 리뷰가 붙은 SHA가 사라진다. force push해도 워크플로에 `synchronize`가
+없어 **리뷰는 옛 커밋에 남고**, push를 안 하면 원격 PR이 접히지 않은 채 머지된다.
+
+**접혀 있지 않으면 Phase 5로 돌아간다.** 아직 push 전이면 거기서 접고,
+이미 올렸으면 새 브랜치를 쌓아 접은 이력으로 새 PR을 연다(브랜치 동결).
 
 **접을 것과 남길 것.**
 
@@ -214,11 +219,21 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > 빼고 올린 뒤, **큐가 머지를 끝낸 다음** 따로 지운다.
 >
 > ```bash
+> BR=$(git rev-parse --abbrev-ref HEAD)
+> REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
+>   || git config "branch.$BR.remote" || echo origin)
+>
 > gh pr merge <N> --merge                      # 큐에 넣는다
 > gh pr view <N> --json state -q .state        # MERGED 가 될 때까지 기다린다
-> git push origin --delete <브랜치>            # 원격
-> git branch -D <브랜치>                       # 로컬 — 이것도 안 지워져 있다
+>
+> git switch "$BASE_BRANCH"                    # 지울 브랜치에서 먼저 나온다
+> git push "$REMOTE" --delete "$BR"            # 원격 — origin 이 아닐 수 있다
+> git branch -D "$BR"                          # 로컬
 > ```
+>
+> **브랜치를 옮긴 뒤에 지운다.** 체크아웃된 브랜치는 git이 삭제를 거부한다.
+> 원격도 `origin`으로 박지 않는다 — fork에서는 push 대상이 다르고, 그대로
+> 두면 **정작 PR의 head 브랜치가 안 지워진다.**
 
 **스쿼시는 커밋 전부를 한 줄로 접는다.** 그러면 두 가지가 같이 사라진다.
 
