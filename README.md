@@ -89,7 +89,7 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 ## 설치
 
 ```bash
-claude plugin marketplace add C:/AI-SW-Maestro/dev-harness
+claude plugin marketplace add /Users/kth/Developer/Repositories/dev-harness
 ```
 
 ```bash
