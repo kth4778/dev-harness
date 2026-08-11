@@ -17,9 +17,13 @@ feature 브랜치인가. 베이스가 프로젝트 CLAUDE.md가 정한 대상인
 # BASE_BRANCH 는 **PR 의 base 로 쓸 값**이다. origin/HEAD 를 그냥 믿지 마라 —
 # 프로젝트 CLAUDE.md 가 develop 이나 release 를 통합 브랜치로 정했으면
 # origin/HEAD(main)와 다르고, 검사가 엉뚱한 이름을 본다. 정한 값을 적는다.
-BASE_BRANCH=develop    # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치. 없으면 아래 기본값
+BASE_BRANCH=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치를 적는다(예: develop)
 [ -n "$BASE_BRANCH" ] || BASE_BRANCH=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C grep -n '[^ -~]'
+
+# SKILL.md 의 BASE 도 이 값에서 유도한다. origin/HEAD 로 잡으면 develop 을 쓰는
+# 저장소에서 엉뚱한 조상을 기준으로 아래 판정들이 돈다.
+BASE=$(git merge-base HEAD "origin/$BASE_BRANCH")
 ```
 
 **뭐라도 나오면 FAIL이다.** `anthropics/claude-code-action`이 **base** 이름을
@@ -38,9 +42,10 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" \
   || echo origin)
+# git@host:owner/repo · https://host/owner/repo · ssh://git@host:22/owner/repo 를 다 받는다
 HEAD_OWNER=$(git remote get-url "$HEAD_REMOTE" \
-  | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#/[^/]+$##; s#\.git$##')
-gh pr list --state all --head "$BR" \
+  | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
+gh pr list --state all --head "$BR" --limit 100 \
   --json number,title,state,headRepositoryOwner \
   -q ".[] | select(.headRepositoryOwner.login == \"$HEAD_OWNER\")"
 ```
@@ -75,11 +80,12 @@ git log --oneline "$BASE"..HEAD
 ```
 
 **하위 기능 수를 세고 커밋 수와 비교한다.** 남을 단위는 하위 기능 하나당
-둘이다 — 만든 커밋과 검증하는 커밋(규칙 2).
+커밋 하나다 — 구현과 테스트가 **같은 커밋**에 들어간다(규칙 2).
 
 | 신호 | 무엇을 뜻하나 |
 |---|---|
-| 커밋 수가 하위 기능 × 2 보다 **많다** | 리뷰 왕복이 접히지 않았다 |
+| 커밋 수가 하위 기능 수보다 **많다** | 리뷰 왕복이 접히지 않았다 |
+| 구현만 있는 커밋 · 테스트만 있는 커밋 | 갈라진 것이다 → 하나로 합친다. 아래 TDD 검사와 같은 판정이다 |
 | 같은 파일·같은 함수를 **세 번 이상** 건드린 커밋들 | 한 자리를 여러 번 고쳤다 → 최종 형태로 접는다 |
 | `chore: …켠다` ↔ `…끈다` 처럼 **상쇄하는 쌍** | 둘 다 아무것도 안 한 것이다 → 접는다 |
 | `test: …통과하던 것을 막는다` | 헛통과를 뒤늦게 막은 것 → 원래 `test:` 커밋에 흡수 |
