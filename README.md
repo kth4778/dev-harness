@@ -46,7 +46,7 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 **제목** + 워크플로우 + 2층 CLAUDE.md + 3층 **경로** 주입 |
 | `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
-| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) |
+| `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) · 실행 비트 없는 훅 |
 | `secret-guard` | PreToolUse(Bash) | 스테이지에 시크릿(AWS 키·토큰·개인키)이 든 커밋 |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
 | `stamp-guard` | PreToolUse(Bash) | 검토 도장 이후에 운영 코드가 바뀐 채로 `gh pr create` |
@@ -142,7 +142,11 @@ git ls-files -s hooks/          # 전부 100755 여야 한다
 ```
 
 `chmod +x`만 하고 넘어가면 **로컬에서는 실행 가능해 안 드러나고 새로 클론한
-사람에게만 터진다.** 훅을 새로 넣을 때마다 `git ls-files -s`로 확인한다.
+사람에게만 터진다.**
+
+**이제 `commit-guard`가 막는다.** `hooks/` 아래 확장자 없는 파일이 `100644`로
+스테이지에 올라오면 커밋을 차단한다 — 2026-08-11 하루에 두 번 놓쳐서
+(secret-guard·lib-cmd) 글에서 기계로 옮겼다.
 
 ## 합격 테스트
 

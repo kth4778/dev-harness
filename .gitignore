@@ -2,3 +2,14 @@
 *.iml
 node_modules/
 .DS_Store
+
+# AI 산출물 — 절대 규칙 9번.
+# 플러그인 정의(.claude-plugin/)와 이 저장소가 배포하는 skills/·hooks/ 는
+# 제품이므로 대상이 아니다. 세션마다 생겼다 사라지는 자리만 막는다.
+.claude/
+_workspace/
+_archive/
+.harness/
+CLAUDE.md
+**/CLAUDE.md
+AGENTS.md
