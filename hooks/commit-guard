@@ -15,6 +15,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 source "$here/lib-input"
 source "$here/lib-cmd"
+source "$here/lib-repo"
 
 read_hook_input
 cmd=$(json_field "tool_input.command")
@@ -39,6 +40,33 @@ feature 브랜치를 만들고 거기서 작업한다:
     git switch -c feature/<기능이름>"
         ;;
 esac
+
+# ── 규칙 2: 머지가 끝난 브랜치를 다시 쓰지 않는다 ────────────────
+# PR 이 머지되면 그 브랜치의 일은 끝났다. 거기에 새 커밋을 얹으면 두 갈래로
+# 샌다 — PR 없이 원격에만 뜨거나, base 를 기능 브랜치로 잡은 스택 PR 이 된다.
+# 스택 PR 은 claude 리뷰가 아예 안 돈다(pr 스킬 참고).
+#
+# 2026-08-11에 실물로 겪었다. PR #18 이 머지된 뒤 같은 브랜치에 커밋 하나가
+# 얹혀 원격에만 떠 있었고, 다음 세션이 그것을 발견할 때까지 아무 데도 안 갔다.
+#
+# 판정: 이 브랜치가 원격에 있고 + tip 이 이미 통합 브랜치 안에 들어가 있다.
+# 방금 판 브랜치는 원격에 없어서 안 걸리고, 올렸지만 아직 안 머지된 브랜치는
+# 통합 브랜치보다 앞서 있어서 안 걸린다.
+if git rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
+    integ=$(default_branch)
+    if [ -n "$integ" ] && git rev-parse --verify -q "origin/$integ" >/dev/null 2>&1 \
+            && git merge-base --is-ancestor HEAD "origin/$integ" 2>/dev/null; then
+        block "차단됨 — 절대 규칙 2번: 머지가 끝난 브랜치를 다시 쓰고 있다.
+
+현재 브랜치: $branch (origin/$integ 에 이미 들어가 있다)
+
+여기에 커밋을 얹으면 PR 없이 원격에만 뜨거나, 스택 PR 이 되어
+claude 리뷰가 아예 안 돈다.
+
+origin/$integ 에서 새 브랜치를 판다:
+    git switch -c <새이름> origin/$integ"
+    fi
+fi
 
 # ── 규칙 9: AI 산출물 ────────────────────────────────────────────
 # 여기도 넓게 본다. 한때 「`.claude/` 가 세션 내내 워킹트리에 있으니 넓히면
