@@ -32,7 +32,12 @@ head만 보면 안 보인다. 이 저장소의 리뷰 워크플로가 그 액션
 BR=$(git rev-parse --abbrev-ref HEAD)
 # head 저장소 owner 는 **이 브랜치가 push 되는 remote** 에서 유도한다.
 # `gh repo view` 는 gh 가 향하는 저장소(fork 라면 upstream)를 주므로 head 와 다르다.
-HEAD_REMOTE=$(git config "branch.$BR.remote" || echo origin)
+# push 대상은 pushRemote > pushDefault > remote 순으로 정해진다.
+# 마지막 것만 보면 fork 로 push 하는 설정에서 소유자를 잘못 짚는다.
+HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
+  || git config remote.pushDefault \
+  || git config "branch.$BR.remote" \
+  || echo origin)
 HEAD_OWNER=$(git remote get-url "$HEAD_REMOTE" \
   | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#/[^/]+$##; s#\.git$##')
 gh pr list --state all --head "$BR" \
@@ -68,6 +73,30 @@ PR이 내 브랜치를 FAIL로 만든다.** 반대로 내가 fork에서 작업�
 ```bash
 git log --oneline "$BASE"..HEAD
 ```
+
+**하위 기능 수를 세고 커밋 수와 비교한다.** 남을 단위는 하위 기능 하나당
+둘이다 — 만든 커밋과 검증하는 커밋(규칙 2).
+
+| 신호 | 무엇을 뜻하나 |
+|---|---|
+| 커밋 수가 하위 기능 × 2 보다 **많다** | 리뷰 왕복이 접히지 않았다 |
+| 같은 파일·같은 함수를 **세 번 이상** 건드린 커밋들 | 한 자리를 여러 번 고쳤다 → 최종 형태로 접는다 |
+| `chore: …켠다` ↔ `…끈다` 처럼 **상쇄하는 쌍** | 둘 다 아무것도 안 한 것이다 → 접는다 |
+| `test: …통과하던 것을 막는다` | 헛통과를 뒤늦게 막은 것 → 원래 `test:` 커밋에 흡수 |
+
+```bash
+# 같은 파일을 몇 번씩 건드렸나
+git log --format=%H "$BASE"..HEAD | while read -r c; do git show --name-only --format= "$c"; done \
+  | sort | uniq -c | sort -rn | head
+```
+
+**접는 것은 Phase 6이 아니라 여기서 판정한다.** 이미 push한 뒤에는 못 접으므로
+(force push가 봇 리뷰를 떠 버린다) 첫 push 전인 이 자리가 마지막 기회다.
+
+2026-08-11 실측: PokeClip PR #34에 커밋 51개가 들어갔고 하위 기능은 12개였다.
+**차이 27개가 리뷰 왕복이다.** 이 검사가 없어서 그대로 머지됐다.
+
+**접은 뒤 테스트를 다시 돌린다** — 접힌 조합으로는 한 번도 안 돌아봤다.
 
 **테스트 판정은 1회 실행으로 쓰지 않는다. 최소 5회다.**
 
