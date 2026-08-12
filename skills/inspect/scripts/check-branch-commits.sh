@@ -77,7 +77,15 @@ bounded() {
     fi
     wait "$pid"
 }
-gh_out() { local o; o=$(mktemp); bounded 30 "$@" > "$o" 2>/dev/null; cat "$o"; rm "$o" 2>/dev/null; }
+# 마지막 명령(rm)의 상태가 아니라 **조회의 상태**를 돌려준다. 삼키면 조회 실패가
+# 「결과 없음」으로 보여 검사가 조용히 꺼진다 — 이 세션에서 같은 실수를
+# 다섯 번째 한다(grep -q SIGPIPE · cat · 서브셸 변수 · jq 오류 · 이것).
+gh_out() {
+    local o rc; o=$(mktemp)
+    bounded 30 "$@" > "$o" 2>/dev/null; rc=$?
+    cat "$o"; rm "$o" 2>/dev/null
+    return "$rc"
+}
 
 UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
   -q '.parent.nameWithOwner // .nameWithOwner')
@@ -92,7 +100,10 @@ if [ -n "$UPSTREAM" ]; then
       --json number,state,headRepositoryOwner \
       -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
              == (\"$HEAD_OWNER\" | ascii_downcase))
-            | select(.number != $SKIP_PR)] | .[0] // empty")
+            | select(.number != $SKIP_PR)] | .[0] // empty") || {
+        bad "PR 이력을 못 읽었다(네트워크·인증·시한). 재사용 검사를 통과로 두지 않는다"
+        exit 1
+    }
     if [ -n "$PRIOR" ]; then
         bad "이 브랜치로 이미 PR 이 열렸다: $PRIOR — 통합 브랜치에서 새로 판다"
     elif [ -n "$PHASE6_PR" ]; then
@@ -114,7 +125,12 @@ BASE_REMOTE=$(git remote | grep -x upstream \
 # 갱신 실패를 넘기면 **낡은 ref 로 판정한다** — 그 사이 들어온 남의 커밋이
 # 내 기능 커밋으로 세어지고 접기 판정이 엉뚱해진다. 실패는 실패로 낸다.
 if git remote | grep -qx "$BASE_REMOTE"; then
-    bounded 30 git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" 2>/dev/null \
+    # refspec 을 **명시한다.** --single-branch 클론은 fetch refspec 이 좁아
+    # `git fetch origin main` 이 FETCH_HEAD 에만 쓰고 origin/main 을 안 만든다 —
+    # 그러면 바로 아래 검증이 늘 실패해 그 환경에서 Phase 5 가 통째로 막힌다.
+    # --no-write-fetch-head 로 사용자의 FETCH_HEAD 를 건드리지 않는다.
+    bounded 30 git fetch --no-tags --no-write-fetch-head "$BASE_REMOTE" \
+        "+refs/heads/$BASE_BRANCH:refs/remotes/$BASE_REMOTE/$BASE_BRANCH" 2>/dev/null \
       || { bad "$BASE_REMOTE/$BASE_BRANCH 를 갱신하지 못했다(네트워크·인증). 낡은 ref 로 판정하지 않는다"; exit 1; }
     git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
       || { bad "$BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; exit 1; }
@@ -142,16 +158,39 @@ TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)(test|spec)[._-][^/]*$|(^|
 # 결과를 **파일로** 받는다. `while` 을 파이프 뒤에 두면 서브셸이라 거기서 세운
 # 값이 밖으로 안 나온다 — 그래서 갈라진 커밋을 찍고도 exit 0 이었다.
 SPLIT=$(mktemp)
+# 문서·설정만 바뀐 커밋
+# `.txt` 는 빼 둔다 — 문서일 수도 데이터·소스일 수도 있어서 예외로 두면
+# 실제 구현 커밋이 조용히 통과한다.
+DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)'
+# 파일 안에 테스트가 함께 있는 관례 — Rust `#[cfg(test)]`, Go `func Test`,
+# Java `@Test`, pytest `def test_`, JS `describe(`/`it(`.
+INLINE_TEST='#\[cfg\(test\)\]|func Test[A-Z]|@Test|def test_|(describe|it)\('
+
 while read -r sha subject; do
     # 커밋이 0개면 heredoc 에 개행 하나가 남아 이 루프가 **한 번 돈다.**
     # 그대로 두면 빈 SHA 가 「갈라진 커밋」으로 기록돼 거짓 FAIL 이 났다
     # (claude, PR #53).
     [ -n "$sha" ] || continue
-    case "$subject" in refactor:*|docs:*|chore:*) continue ;; esac
+    case "$subject" in refactor:*|refactor\(*|chore:*|chore\(*) continue ;; esac
+
     files=$(git show --name-only --format= "$sha")
+    [ -n "$files" ] || continue
+
+    # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나
+    # `fix: 잘못된 설명을 고친다` 가 빠져 README 하나 고친 커밋이 FAIL 이 됐다.
+    printf '%s\n' "$files" | grep -vE "$DOCPAT" | grep -q . || continue
+
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
     has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" | grep -c . || true)
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
+
+    # 경로로 못 가리는 관례가 있다 — 구현 파일 안에 테스트를 같이 두는 언어.
+    # 추가된 줄에 테스트 표식이 있으면 함께 있는 것으로 본다.
+    if [ "$has_test" = 0 ] && git show --format= -U0 "$sha" \
+         | grep '^+' | grep -qE "$INLINE_TEST"; then
+        continue
+    fi
+
     printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject" >> "$SPLIT"
 done <<SPLITEOF
 $(git log --format='%H %s' "$BASE"..HEAD)

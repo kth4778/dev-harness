@@ -132,6 +132,34 @@ fresh; git switch -qc feature/prefix
 printf 'x\n' > foo.py; printf 't\n' > test_foo.py; git add .; git commit -qm "feat: pytest 관례"
 printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y 'test_foo.py 를 테스트로 본다' || r n n 'test_foo.py 를 테스트로 본다'
 
+echo "── codex 지적 (PR #54) ──"
+# 제목이 docs: 가 아니어도 바뀐 것이 문서뿐이면 예외다.
+fresh; git switch -qc feature/docfix
+printf 'x\n' > README.md; git add .; git commit -qm "fix: 잘못된 설명을 고친다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '문서만 바뀐 커밋은 제목과 무관하게 예외'
+fresh; git switch -qc feature/docscope
+mkdir -p docs; printf 'x\n' > docs/a.md; git add .; git commit -qm "docs(readme): 갱신"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" 'docs(readme): 형식도 예외'
+
+# 구현 파일 안에 테스트를 두는 관례(Rust·Go).
+fresh; git switch -qc feature/colocated
+mkdir -p src; printf 'fn f(){}\n#[cfg(test)]\nmod t{ #[test] fn a(){} }\n' > src/lib.rs
+git add .; git commit -qm "feat: rust 관례"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '파일 안에 테스트가 함께 있으면 예외'
+
+# PR 이력 조회가 실패하면 통과로 두지 않는다.
+fresh; git switch -qc feature/apifail
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+cat > "$BIN/gh" <<'GHF'
+#!/usr/bin/env bash
+case "$*" in
+  *"repo view"*) printf 'o/r\n' ;;
+  *"pr list"*)   exit 1 ;;
+esac
+GHF
+chmod +x "$BIN/gh"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'PR 이력 조회 실패를 통과로 두지 않는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

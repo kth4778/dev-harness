@@ -179,14 +179,37 @@ if [ -n "$BASE_NWO" ]; then
             && { BASE_REMOTE="$rmt"; break; }
     done
 fi
-[ -n "$BASE_REMOTE" ] || BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
+if [ -z "$BASE_REMOTE" ]; then
+    if [ -n "$BASE_NWO" ]; then
+        # API 가 base 저장소를 알려줬는데 로컬에 그 원격이 없다. 폴백하면
+        # **fork 의 낡은 base** 를 당겨 방금 머지한 변경이 빠진 채로 다음 작업이
+        # 시작된다. 멈추고 원격을 붙이라고 한다.
+        die "PR 의 base 저장소 $BASE_NWO 를 가리키는 원격이 없다.
+       추가한 뒤 다시 부른다:  git remote add upstream https://github.com/$BASE_NWO.git"
+    fi
+    BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
+fi
 
 # ── 머지 ────────────────────────────────────────────────────────
+# 저장소가 허용하는 전략을 쓴다. merge commit 을 끈 저장소에서 `--merge` 만
+# 두 번 시도하면 **Phase 6 이 통째로 막힌다.** 기본은 --merge 다(규칙 2 —
+# 커밋 단위를 남긴다). 없으면 squash·rebase 로 떨어진다. 그때는 이력이 접히므로
+# 진행 기록이 해시가 아니라 제목을 가리켜야 한다(build 스킬).
+STRAT=--merge
+if [ "$(gh_json mergeCommitAllowed .mergeCommitAllowed 2>/dev/null)" = "false" ]; then
+    if [ "$(gh_json squashMergeAllowed .squashMergeAllowed 2>/dev/null)" = "true" ]; then
+        STRAT=--squash
+    elif [ "$(gh_json rebaseMergeAllowed .rebaseMergeAllowed 2>/dev/null)" = "true" ]; then
+        STRAT=--rebase
+    fi
+    printf '  merge commit 이 꺼져 있다 — %s 로 머지한다\n' "$STRAT" >&2
+fi
+
 # --match-head-commit 이 리뷰된 커밋과 다르면 거부한다.
 # merge queue 를 쓰는 저장소는 --delete-branch 를 거부하므로 두 갈래로 시도한다.
-if ! bounded 60 gh pr merge "$PR" --merge --delete-branch --match-head-commit "$REVIEWED"; then
+if ! bounded 60 gh pr merge "$PR" "$STRAT" --delete-branch --match-head-commit "$REVIEWED"; then
     printf '  --delete-branch 가 거부됐다(merge queue로 보인다). 플래그 없이 넣는다\n' >&2
-    bounded 60 gh pr merge "$PR" --merge --match-head-commit "$REVIEWED" \
+    bounded 60 gh pr merge "$PR" "$STRAT" --match-head-commit "$REVIEWED" \
         || die "머지 요청이 실패했다. 인증·권한·체크, 그리고 리뷰 뒤 push 가 있었는지 확인한다"
 fi
 
@@ -215,13 +238,25 @@ bounded 60 git pull --ff-only "$BASE_REMOTE" "$BASE" \
 
 # 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
 # --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
-bounded 30 git ls-remote --exit-code --heads "$HEAD_REMOTE" "$BR"
+RLS=$(mktemp)
+bounded 30 git ls-remote --exit-code --heads "$HEAD_REMOTE" "$BR" > "$RLS" 2>/dev/null
 case $? in
-    0)  bounded 60 git push "$HEAD_REMOTE" --delete "$BR" \
-            || die "원격 삭제 실패 — 로컬도 남긴다" ;;
+    0)  # 원격이 아직 그 커밋을 가리키는지 본다. 큐를 기다리는 20분 사이에
+        # 누가 push 하거나 브랜치를 다시 만들었으면 **그 새 커밋이 날아간다** —
+        # 이 PR 에 없던 것이다. 리뷰된 SHA 에 묶어 지운다.
+        REMOTE_OID=$(awk '{print $1; exit}' "$RLS")
+        if [ "$REMOTE_OID" = "$REVIEWED" ]; then
+            bounded 60 git push "$HEAD_REMOTE" --delete "$BR" \
+                || { rm "$RLS" 2>/dev/null; die "원격 삭제 실패 — 로컬도 남긴다"; }
+        else
+            rm "$RLS" 2>/dev/null
+            die "원격 $BR 이 ${REMOTE_OID:0:8} 를 가리킨다(리뷰된 것은 ${REVIEWED:0:8}).
+       머지 뒤에 누가 push 했다 — 그 커밋을 지우지 않는다. 눈으로 확인한다"
+        fi ;;
     2)  printf '  원격에 이미 없다(자동 삭제 설정으로 보인다)\n' >&2 ;;
-    *)  die "원격 조회 실패 — 지워졌는지 알 수 없어 로컬을 남긴다" ;;
+    *)  rm "$RLS" 2>/dev/null; die "원격 조회 실패 — 지워졌는지 알 수 없어 로컬을 남긴다" ;;
 esac
+rm "$RLS" 2>/dev/null
 
 if ! git branch -D "$BR" 2>/dev/null; then
     # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —

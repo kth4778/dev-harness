@@ -66,6 +66,9 @@ case "$2" in
       *headRefOid*)           printf '%s\n' "${GH_OID}" ;;
       *headRepositoryOwner*)  printf '%s\n' "${GH_OWNER:-me}" ;;
       *headRepository*)       printf '%s\n' "${GH_REPO:-work}" ;;
+      *mergeCommitAllowed*)   printf '%s\n' "${GH_MERGE_OK:-true}" ;;
+      *squashMergeAllowed*)   printf '%s\n' "${GH_SQUASH_OK:-true}" ;;
+      *rebaseMergeAllowed*)   printf '%s\n' "${GH_REBASE_OK:-true}" ;;
       *state*)                printf '%s\n' "${GH_STATE:-MERGED}" ;;
     esac
     exit "${GH_VIEW_RC:-0}" ;;
@@ -189,6 +192,22 @@ echo "── 봇 로그인을 정확히 대조한다 (PR #53) ──"
 # `claude-review-helper` 같은 아무 계정이 리뷰 하나로 통과시킬 수 없어야 한다.
 fresh; out=$(REQUIRED_BOTS="chatgpt-codex-connector[bot] claude[bot]" GH_CH_CLAUDE=none run); rc=$?
 r 1 "$rc" '요구한 로그인이 없으면 멈춘다'
+
+echo "── codex 지적 (PR #54) ──"
+# merge commit 이 꺼진 저장소에서 --merge 만 두 번 시도하면 Phase 6 이 막힌다.
+fresh; out=$(GH_MERGE_OK=false GH_SQUASH_OK=true run); rc=$?
+r 0 "$rc" 'merge commit 이 꺼져 있으면 squash 로 떨어진다'
+printf '%s' "$out" | grep -q "squash" && r y y '어느 전략을 썼는지 알린다' || r y n '어느 전략을 썼는지 알린다'
+
+# 큐를 기다리는 사이 누가 push 하면 그 커밋을 지우면 안 된다.
+fresh
+# 원격 브랜치를 다른 커밋으로 옮긴다(다른 사람이 push 한 셈).
+printf 'other\n' > o.txt; git add o.txt; git commit -qm "남의 커밋"
+git push -q origin feature/x 2>/dev/null
+git reset -q --hard HEAD~1                     # 로컬은 리뷰된 커밋으로 되돌린다
+out=$(run); rc=$?
+r 1 "$rc" '원격이 다른 커밋을 가리키면 안 지운다'
+printf '%s' "$out" | grep -q "머지 뒤에 누가 push" && r y y '왜 멈췄는지 알린다' || r y n '왜 멈췄는지 알린다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
