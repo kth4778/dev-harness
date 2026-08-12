@@ -38,7 +38,10 @@ description: 전수 검사가 전부 PASS한 뒤 PR을 올리고 봇 리뷰에 �
 통합 브랜치 이름을 박아두지 않는다. 저장소마다 다르다(`develop`인 곳도 `main`인 곳도 있다).
 
 ```bash
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+# Phase 5 가 검사한 값을 그대로 쓴다. origin/HEAD 는 기본값일 뿐이고,
+# 프로젝트 CLAUDE.md 가 develop·release 를 통합 브랜치로 정했으면 다르다.
+BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
+[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git push -u origin feature/{이름}
 gh pr create --base "$BASE" --title "{타입}: {한 줄}" --body-file _workspace/pr-body.md
 ```
@@ -224,14 +227,20 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 >   || git config "branch.$BR.remote" || echo origin)
 >
 > gh pr merge <N> --merge                      # 큐에 넣는다
-> gh pr view <N> --json state -q .state        # MERGED 가 될 때까지 기다린다
 >
-> git switch "$BASE_BRANCH"                    # 지울 브랜치에서 먼저 나온다
+> # 큐가 끝날 때까지 **실제로 기다린다.** 한 번 조회하고 넘어가면 아직 큐에
+> # 있는 채로 브랜치를 지워 머지가 밀려난다.
+> until [ "$(gh pr view <N> --json state -q .state)" = "MERGED" ]; do sleep 20; done
+>
+> git switch "$BASE"                           # 지울 브랜치에서 먼저 나온다
 > git push "$REMOTE" --delete "$BR"            # 원격 — origin 이 아닐 수 있다
 > git branch -D "$BR"                          # 로컬
 > ```
 >
 > **브랜치를 옮긴 뒤에 지운다.** 체크아웃된 브랜치는 git이 삭제를 거부한다.
+> `$BASE`는 이 파일 위쪽에서 정의한 통합 브랜치다 — 다른 파일의 `BASE_BRANCH`를
+> 빌려 쓰면 빈 문자열이 되어 `git switch ""`가 실패하고, **그러면 브랜치에 남은
+> 채로 다음 줄도 실패한다.**
 > 원격도 `origin`으로 박지 않는다 — fork에서는 push 대상이 다르고, 그대로
 > 두면 **정작 PR의 head 브랜치가 안 지워진다.**
 
@@ -255,7 +264,10 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 머지 후 로컬 정리:
 
 ```bash
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+# Phase 5 가 검사한 값을 그대로 쓴다. origin/HEAD 는 기본값일 뿐이고,
+# 프로젝트 CLAUDE.md 가 develop·release 를 통합 브랜치로 정했으면 다르다.
+BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
+[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git switch "$BASE" && git pull
 git fetch --prune                    # 원격에서 지워진 브랜치의 추적 ref 정리
 ```

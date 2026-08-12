@@ -45,9 +45,13 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
 # git@host:owner/repo · https://host/owner/repo · ssh://git@host:22/owner/repo 를 다 받는다
 HEAD_OWNER=$(git remote get-url --push "$HEAD_REMOTE" \
   | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
-gh pr list --state all --head "$BR" --limit 100 \
+# --repo 로 **upstream**을 짚는다. fork 에서 gh 가 어디를 향할지는 설정에 달렸고,
+# 옛 PR 은 upstream 에 있다. 소유자 비교는 대소문자를 무시한다 — GitHub 로그인은
+# 대소문자를 구분하지 않는데 문자열 비교는 구분한다.
+UPSTREAM=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 100 \
   --json number,title,state,headRepositoryOwner \
-  -q ".[] | select(.headRepositoryOwner.login == \"$HEAD_OWNER\")"
+  -q ".[] | select((.headRepositoryOwner.login | ascii_downcase) == (\"$HEAD_OWNER\" | ascii_downcase))"
 ```
 
 **하나라도 나오면 FAIL이다.** 상태별로 이유가 다르다.
