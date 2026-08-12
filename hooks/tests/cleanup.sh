@@ -22,33 +22,38 @@ cat > "$BIN/gh" <<'GH'
 # 순으로 찾으므로, 어느 채널에 무엇을 놓는지가 갈래를 만든다.
 #   GH_CH_CODEX / GH_CH_CLAUDE : review | comment | reaction | none
 #   GH_REVIEWED / GH_REVIEWED_CLAUDE : 그 봇이 본 커밋(기본 현재 head)
-ch()  { case "$1" in codex) printf '%s' "${GH_CH_CODEX:-review}" ;;
-                     claude) printf '%s' "${GH_CH_CLAUDE:-review}" ;; esac; }
-oid() { case "$1" in codex) printf '%s' "${GH_REVIEWED:-$GH_OID}" ;;
-                     claude) printf '%s' "${GH_REVIEWED_CLAUDE:-${GH_REVIEWED:-$GH_OID}}" ;; esac; }
+# 스크립트는 이제 **정확한 로그인**으로 거른다.
+ch()  { case "$1" in *codex*) printf '%s' "${GH_CH_CODEX:-review}" ;;
+                     *claude*) printf '%s' "${GH_CH_CLAUDE:-review}" ;; esac; }
+oid() { case "$1" in *codex*) printf '%s' "${GH_REVIEWED:-$GH_OID}" ;;
+                     *claude*) printf '%s' "${GH_REVIEWED_CLAUDE:-${GH_REVIEWED:-$GH_OID}}" ;; esac; }
 case "$1" in
   api)
     case "$*" in
       */commits/*)  printf '%s\n' "${GH_HEAD_TIME:-2020-01-01T00:00:00Z}"; exit 0 ;;
       */pulls/*/reviews*)
         for b in codex claude; do
-          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          printf '%s' "$*" | grep -q "$b" || continue
           [ "$(ch $b)" = review ] && printf '%s\n' "$(oid $b)"
         done; exit 0 ;;
       */pulls/*/comments*)
         for b in codex claude; do
-          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          printf '%s' "$*" | grep -q "$b" || continue
           [ "$(ch $b)" = comment ] && printf '%s\n' "$(oid $b)"
         done; exit 0 ;;
       */issues/*/comments*)
         for b in codex claude; do
-          printf '%s' "$*" | grep -q "\"$b\"" || continue
-          [ "$(ch $b)" = icomment ] && printf '%s\n' "${GH_EV_TIME:-2030-01-01T00:00:00Z}"
+          printf '%s' "$*" | grep -q "$b" || continue
+          [ "$(ch $b)" = icomment ] && printf '%s\n' "1"
         done; exit 0 ;;
       */issues/*/reactions*)
+        # 스크립트가 content == "+1" 을 요구한다. eyes 만 있으면 안 나온다.
         for b in codex claude; do
-          printf '%s' "$*" | grep -q "\"$b\"" || continue
-          [ "$(ch $b)" = reaction ] && printf '%s\n' "${GH_EV_TIME:-2030-01-01T00:00:00Z}"
+          printf '%s' "$*" | grep -q "$b" || continue
+          case "$(ch $b)" in
+            reaction)      printf '%s' "$*" | grep -q '"+1"' && printf '1\n' ;;
+            reaction_eyes) : ;;
+          esac
         done; exit 0 ;;
       *) printf '%s\n' "${GH_BASE_NWO:-}" ; exit 0 ;;   # base repo full_name
     esac ;;
@@ -158,22 +163,32 @@ fresh; out=$(GH_OWNER=other run); rc=$?
 r 1 "$rc" 'PR head 가 다른 저장소면 멈춘다'
 r "feature/x" "$(git branch --show-current)" '내 브랜치를 안 지운다'
 
-echo "── 봇 증거가 리뷰 아닌 채널로 올 때 (PR #52) ──"
+echo "── 봇 증거가 SHA 없는 채널로만 올 때 (PR #53) ──"
 # 실제로 PR #33 은 codex 가 반응만, claude 가 이슈 코멘트만 남겼다.
+# 그것이 **현재 head** 를 본 것인지 기계가 알 수 없으므로 자동 통과시키지 않는다.
 fresh; out=$(GH_CH_CODEX=reaction GH_CH_CLAUDE=icomment run); rc=$?
-r 0 "$rc" '반응·코멘트만 있어도 통과한다'
-r "" "$(git branch --list feature/x)" '정리가 끝났다'
+r 1 "$rc" 'SHA 없는 채널만 있으면 사람 확인을 요구한다'
+printf '%s' "$out" | grep -q "CLEANUP_ALLOW_SHALESS" && r y y '어떻게 넘어가는지 알려준다' || r y n '어떻게 넘어가는지 알려준다'
+r "feature/x" "$(git branch --show-current)" '그때는 아무것도 안 지운다'
+
+fresh; out=$(CLEANUP_ALLOW_SHALESS=1 GH_CH_CODEX=reaction GH_CH_CLAUDE=icomment run); rc=$?
+r 0 "$rc" '사람이 확인했다고 하면 진행한다'
 
 fresh; out=$(GH_CH_CODEX=comment GH_CH_CLAUDE=review run); rc=$?
-r 0 "$rc" '인라인 리뷰 코멘트도 증거로 본다'
+r 0 "$rc" '인라인 리뷰 코멘트는 SHA 가 있어 자동으로 받는다'
 
-# head 보다 **앞선** 시각의 반응은 그 커밋을 본 것이 아니다.
-fresh; out=$(GH_CH_CODEX=reaction GH_EV_TIME=2019-01-01T00:00:00Z run); rc=$?
-r 1 "$rc" 'head 보다 앞선 반응은 증거가 아니다'
+echo "── 반응 종류를 가른다 ──"
+fresh; out=$(GH_CH_CODEX=reaction_eyes GH_CH_CLAUDE=review run); rc=$?
+r 1 "$rc" 'eyes(검토 시작)는 완료 증거가 아니다'
 
 echo "── head 저장소를 정확히 대조한다 ──"
 fresh; out=$(GH_REPO=work-backup run); rc=$?
 r 1 "$rc" 'me/work 와 me/work-backup 을 가른다(부분문자열 아님)'
+
+echo "── 봇 로그인을 정확히 대조한다 (PR #53) ──"
+# `claude-review-helper` 같은 아무 계정이 리뷰 하나로 통과시킬 수 없어야 한다.
+fresh; out=$(REQUIRED_BOTS="chatgpt-codex-connector[bot] claude[bot]" GH_CH_CLAUDE=none run); rc=$?
+r 1 "$rc" '요구한 로그인이 없으면 멈춘다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

@@ -84,49 +84,62 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
 #
 # SHA 가 없는 채널은 **시각**으로 판정한다. head 커밋이 올라간 뒤에 남은
 # 증거면 그 커밋을 보고 남긴 것이다.
-HEAD_TIME=$(bounded 30 gh api "repos/{owner}/{repo}/commits/$PR_OID" \
-    -q '.commit.committer.date' 2>/dev/null) || HEAD_TIME=
+# 봇 로그인은 **정확히** 대조한다. `contains("claude")` 로 보면
+# `claude-review-helper` 같은 아무 계정이 리뷰 하나 남겨 통과시킬 수 있다.
+BOTS="${REQUIRED_BOTS:-chatgpt-codex-connector[bot] claude[bot]}"
 
-seen_bot() {                       # $1 = 봇 이름 조각
-    local bot="$1" f
+# SHA 있는 증거(리뷰·인라인 코멘트)만 자동으로 받는다.
+seen_bot_sha() {                   # $1 = 정확한 로그인
+    local bot="$1" f rc=1
     f=$(mktemp)
-
-    # 1) 리뷰 — SHA 로 대조
-    bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
-        -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .commit_id" \
-        > "$f" 2>/dev/null
-    grep -qx "$PR_OID" "$f" && { rm "$f" 2>/dev/null; return 0; }
-
-    # 2) 인라인 리뷰 코멘트 — SHA 로 대조
-    bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/comments" \
-        -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .commit_id" \
-        > "$f" 2>/dev/null
-    grep -qx "$PR_OID" "$f" && { rm "$f" 2>/dev/null; return 0; }
-
-    # 3) 이슈 코멘트·반응 — SHA 가 없으니 head 이후 시각으로 본다
-    if [ -n "$HEAD_TIME" ]; then
-        bounded 30 gh api "repos/{owner}/{repo}/issues/$PR/comments" \
-            -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .created_at" \
-            > "$f" 2>/dev/null
-        bounded 30 gh api "repos/{owner}/{repo}/issues/$PR/reactions" \
-            -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .created_at" \
-            >> "$f" 2>/dev/null
-        while read -r t; do
-            [ -n "$t" ] && [ "$t" \> "$HEAD_TIME" ] && { rm "$f" 2>/dev/null; return 0; }
-        done < "$f"
+    bounded 30 gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" \
+        -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
+    grep -qx "$PR_OID" "$f" && rc=0
+    if [ "$rc" != 0 ]; then
+        bounded 30 gh api --paginate "repos/{owner}/{repo}/pulls/$PR/comments" \
+            -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
+        grep -qx "$PR_OID" "$f" && rc=0
     fi
-
     rm "$f" 2>/dev/null
-    return 1
+    return "$rc"
 }
 
-MISSING=
-for bot in ${REQUIRED_BOTS:-codex claude}; do
-    seen_bot "$bot" || MISSING="$MISSING $bot"
+# SHA 없는 증거(이슈 코멘트·👍 반응)가 있는지만 본다. **통과시키지는 않는다** —
+# 그 시각이 head 가 올라간 시각보다 뒤인지 알 방법이 없다. 커밋 메타데이터의
+# 날짜는 로컬에서 만든 시각이라 push 시각이 아니다.
+# 반응은 `+1` 만 본다. codex 는 검토를 시작할 때 `eyes` 를 남기고, 그 뒤 리뷰가
+# 실패할 수도 있다 — 그것을 완료로 읽으면 안 본 코드가 머지된다.
+seen_bot_shaless() {
+    local bot="$1" f rc=1
+    f=$(mktemp)
+    bounded 30 gh api --paginate "repos/{owner}/{repo}/issues/$PR/comments" \
+        -q ".[] | select(.user.login == \"$bot\") | .id" > "$f" 2>/dev/null
+    [ -s "$f" ] && rc=0
+    if [ "$rc" != 0 ]; then
+        bounded 30 gh api --paginate "repos/{owner}/{repo}/issues/$PR/reactions" \
+            -q ".[] | select(.user.login == \"$bot\" and .content == \"+1\") | .id" \
+            > "$f" 2>/dev/null
+        [ -s "$f" ] && rc=0
+    fi
+    rm "$f" 2>/dev/null
+    return "$rc"
+}
+
+MISSING= ; SHALESS=
+for bot in $BOTS; do
+    seen_bot_sha "$bot" && continue
+    if seen_bot_shaless "$bot"; then SHALESS="$SHALESS $bot"; else MISSING="$MISSING $bot"; fi
 done
 [ -z "$MISSING" ] || die "봇이 현재 head(${PR_OID:0:8})를 본 증거가 없다:$MISSING
        리뷰 뒤에 push 됐거나 아직 안 돌았다 — 그 커밋은 아무도 안 봤다.
        새 브랜치로 다시 올린다(규칙 7)"
+
+if [ -n "$SHALESS" ] && [ -z "${CLEANUP_ALLOW_SHALESS:-}" ]; then
+    die "봇 증거가 SHA 없는 채널로만 왔다:$SHALESS
+       codex 는 지적이 없으면 👍 만, claude 는 --comment 로 돌면 코멘트만 남긴다.
+       그것이 **현재 head** 를 본 것인지 기계가 확인할 수 없다.
+       눈으로 확인한 뒤 다시 부른다:  CLEANUP_ALLOW_SHALESS=1 <이 스크립트> $PR"
+fi
 REVIEWED="$PR_OID"
 
 # head 를 올린 원격. base 와 다를 수 있다(fork). 머지 **전에** 잡아둔다 —
@@ -156,9 +169,16 @@ PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.
 BASE_NWO=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR" \
     -q '.base.repo.full_name' 2>/dev/null)
+# 부분문자열로 찾으면 `me/work` 가 `me/work-backup` 원격에 들어맞아 **엉뚱한
+# 저장소에서 통합 브랜치를 당긴다.** head 쪽과 같은 정규화로 정확히 비교한다.
 BASE_REMOTE=
-[ -n "$BASE_NWO" ] && BASE_REMOTE=$(git remote -v | awk -v n="$BASE_NWO" \
-    'index($0, n) && /\(fetch\)/ {print $1; exit}')
+if [ -n "$BASE_NWO" ]; then
+    want=$(printf '%s' "$BASE_NWO" | tr '[:upper:]' '[:lower:]')
+    for rmt in $(git remote); do
+        [ "$(url_nwo "$(git remote get-url "$rmt" 2>/dev/null)")" = "$want" ] \
+            && { BASE_REMOTE="$rmt"; break; }
+    done
+fi
 [ -n "$BASE_REMOTE" ] || BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
 
 # ── 머지 ────────────────────────────────────────────────────────

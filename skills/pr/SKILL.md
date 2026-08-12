@@ -183,8 +183,14 @@ FAIL을 내고, 그 자리에서 접는다 — 여기(Phase 6)에 오면 이미 
 PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기회다.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" "$BASE"
+BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록마다 다시 정한다)
+[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" "$BASE" --phase6 <PR번호>
 ```
+
+**`--phase6 <PR번호>` 를 넘긴다.** 안 넘기면 지금 열린 이 PR 이 「이 브랜치로
+이미 PR 이 열렸다」로 잡힌다. 반대로 Phase 5 에서는 넘기지 않는다 — 그때
+열린 PR 이 있다면 그것은 **얼린 PR 에 커밋을 얹으려는 것**이라 막아야 한다.
 
 **여기서도 스크립트를 부른다.** `git log "$BASE"..HEAD` 를 코드 블록에 두면
 `BASE` 가 없어 `HEAD..HEAD` 로 읽히고 **커밋을 하나도 안 보여준다.**
@@ -232,7 +238,7 @@ PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기�
 
 **손으로 치지 않는다.** 이 절차를 문서 안 코드 블록으로 두었다가 같은 실수를
 네 번 냈다 — 블록마다 새 셸이라 앞에서 정한 변수가 없었고, 문서라서 한 번도
-안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **34갈래를 실제로 잰다.**
+안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **37갈래를 실제로 잰다.**
 
 스크립트가 하는 일:
 
@@ -242,7 +248,8 @@ PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기�
 | 시한 | 요청마다 30초, 큐 대기는 20분. `gh`·`git` 둘 다 타임아웃 옵션이 없고 macOS에는 `timeout(1)`이 없어 직접 잰다 |
 | 대조 | **PR 의 head 가 지금 브랜치와 같은지 먼저 본다.** 번호를 잘못 넣으면 상관없는 브랜치를 원격까지 지운다 |
 | 고정 | `--match-head-commit` 으로 **리뷰가 붙은 커밋**에 묶는다. 리뷰 뒤 누가 push 했으면 거부한다 — 이 워크플로에는 `synchronize` 가 없어 그 커밋은 리뷰를 못 받는다 |
-| 봇 확인 | 봇 둘이 **각각** 현재 head 를 봤는지 네 채널로 찾는다 — 리뷰 · 인라인 코멘트 · 이슈 코멘트 · 반응. codex 는 지적이 없으면 👍 만 남기고, claude 는 `--comment` 로 돌면 코멘트로 온다. 리뷰만 보면 **정상 PR 을 전부 막는다**(PR #33 이 그랬다) |
+| 봇 확인 | 봇 둘이 **각각** 현재 head 를 봤는지 본다. 로그인을 **정확히** 대조한다 — `contains("claude")` 로 보면 `claude-review-helper` 같은 아무 계정이 통과한다 |
+| SHA 없는 증거 | codex 가 👍 만, claude 가 코멘트만 남기는 경우가 있다(PR #33). 그것이 **현재 head** 를 본 것인지 기계가 알 수 없으므로 **자동으로 통과시키지 않고 멈춘다.** 눈으로 확인한 뒤 `CLEANUP_ALLOW_SHALESS=1` 로 다시 부른다. 반응은 `+1` 만 본다 — `eyes` 는 검토 시작 신호다 |
 | 확인 | 명령이 성공해도 **상태를 직접 본다.** 큐에 넣기만 했거나 auto-merge 를 켜 둔 것일 수 있다 |
 | 정리 | PR 의 base 로 옮긴 **뒤** 원격·로컬 브랜치를 지운다. head 를 올린 원격은 머지 **전에** 잡아둔다 |
 | 멈추는 곳 | head 불일치 · 조회 실패 · 큐에 못 넣음 · 머지가 안 끝남 · 브랜치 이동 실패 · 원격 조회 실패. **그때는 아무것도 안 지운다** |

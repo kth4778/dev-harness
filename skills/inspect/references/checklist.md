@@ -6,6 +6,10 @@
 "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" [통합브랜치]
 ```
 
+Phase 6 에서 다시 부를 때만 `--phase6 <PR번호>` 를 붙인다 — 그 PR 하나를
+재사용 검사에서 뺀다. **Phase 5 에서는 붙이지 않는다.** 그때 열린 PR 이 있다면
+얼린 PR 에 커밋을 얹으려는 것이므로 막아야 한다.
+
 **손으로 치지 않는다.** 코드 블록으로 두었더니 **블록마다 새 셸이라 `BASE`가
 없었고**, `..HEAD`가 `HEAD..HEAD`로 읽혀 **커밋을 하나도 못 세고 조용히
 통과했다.** `pr` 스킬에서 이미 같은 병을 겪어 스크립트로 뺐다.

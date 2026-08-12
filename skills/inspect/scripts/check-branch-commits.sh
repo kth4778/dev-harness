@@ -9,6 +9,11 @@
 set -uo pipefail
 
 BASE_BRANCH="${1:-}"
+# Phase 6 에서 다시 부를 때만 **그 PR 번호**를 넘긴다. 열린 PR 을 무조건 빼면
+# Phase 5 에서 얼린 PR 에 커밋을 얹는 것을 못 잡는다 — 예외는 처리 중인 PR
+# 하나로 못박는다.
+PHASE6_PR=
+[ "${2:-}" = "--phase6" ] && PHASE6_PR="${3:-}"
 FAIL=0
 bad() { printf 'FAIL — %s\n' "$1" >&2; FAIL=1; }
 ok()  { printf 'PASS — %s\n' "$1"; }
@@ -41,11 +46,19 @@ printf '%s\n%s\n' "$BR" "$BASE_BRANCH" | LC_ALL=C grep -n '[^ -~]' \
 HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" || echo origin)
-HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
-  || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
-HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
-  | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
-[ -n "$HEAD_OWNER" ] || { bad "원격 URL 에서 소유자를 못 뽑았다: $HEAD_URL"; exit 1; }
+# 원격이 없으면 재사용 검사를 **건너뛴다.** 판정 근거가 없는 것을 실패로 내면
+# 로컬 전용 저장소에서 Phase 5 가 늘 막힌다 — 이 저장소의 「근거 없으면 막지
+# 않는다」 원칙과 같다. 있는데 못 읽는 것은 다르다(그때는 실패).
+HEAD_OWNER=
+if git remote | grep -qx "$HEAD_REMOTE"; then
+    HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
+      || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
+    HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
+      | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
+    [ -n "$HEAD_OWNER" ] || { bad "원격 URL 에서 소유자를 못 뽑았다: $HEAD_URL"; exit 1; }
+else
+    printf '  (원격이 없다 — 재사용 검사를 건너뛴다)\n' >&2
+fi
 
 # 이 브랜치로 PR 이 열렸던 적이 있나. fork 면 parent 를 짚는다.
 # gh 에는 요청 타임아웃 옵션이 없다. 응답이 안 오면 Phase 5 가 통째로 멈추므로
@@ -69,21 +82,21 @@ gh_out() { local o; o=$(mktemp); bounded 30 "$@" > "$o" 2>/dev/null; cat "$o"; r
 UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
   -q '.parent.nameWithOwner // .nameWithOwner')
 if [ -n "$UPSTREAM" ]; then
-    # **지금 열려 있는 PR 하나는 뺀다.** Phase 6 에서 이 스크립트를 다시 부르면
-    # 그 PR 이 목록에 있어 「재사용」으로 잡힌다 — 정상 흐름이 늘 FAIL 이 된다.
-    # 그 하나를 빼도 안전하다: 열린 PR 이 둘 이상이거나 머지·닫힌 것이 있으면
-    # 여전히 걸린다.
-    CUR=$(gh_out gh pr list --repo "$UPSTREAM" --state open --head "$BR" --limit 10 \
-      --json number -q '.[0].number // empty')
+    # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
+    # jq 안에서 빈 값을 그대로 펼치면 구문 오류가 나고, 그 실패를 삼키면
+    # PRIOR 이 조용히 비어 **재사용 검사가 통째로 무력해진다**(claude, PR #53).
+    SKIP_PR="${PHASE6_PR:--1}"
+    case "$SKIP_PR" in ''|*[!0-9-]*) SKIP_PR=-1 ;; esac
+
     PRIOR=$(gh_out gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
       --json number,state,headRepositoryOwner \
       -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
              == (\"$HEAD_OWNER\" | ascii_downcase))
-            | select(.number != ($CUR // -1))] | .[0] // empty" 2>/dev/null)
+            | select(.number != $SKIP_PR)] | .[0] // empty")
     if [ -n "$PRIOR" ]; then
         bad "이 브랜치로 이미 PR 이 열렸다: $PRIOR — 통합 브랜치에서 새로 판다"
-    elif [ -n "$CUR" ]; then
-        ok "이 브랜치의 PR 은 지금 열린 #$CUR 하나다"
+    elif [ -n "$PHASE6_PR" ]; then
+        ok "이 브랜치의 PR 은 지금 처리 중인 #$PHASE6_PR 하나다"
     else
         ok "이 브랜치로 열린 PR 이 없다"
     fi
@@ -98,11 +111,22 @@ BASE_REMOTE=$(git remote | grep -x upstream \
   || git config "branch.$BASE_BRANCH.remote" || echo origin)
 # ref 가 **있어도** 가져온다. 낡은 것으로 merge-base 를 재면 그 사이 upstream 에
 # 들어온 남의 커밋이 내 기능 커밋으로 세어진다 — 있으면 건너뛰던 것이 그 구멍이었다.
-bounded 30 git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" 2>/dev/null
-git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
-  || { bad "$BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; exit 1; }
+# 갱신 실패를 넘기면 **낡은 ref 로 판정한다** — 그 사이 들어온 남의 커밋이
+# 내 기능 커밋으로 세어지고 접기 판정이 엉뚱해진다. 실패는 실패로 낸다.
+if git remote | grep -qx "$BASE_REMOTE"; then
+    bounded 30 git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" 2>/dev/null \
+      || { bad "$BASE_REMOTE/$BASE_BRANCH 를 갱신하지 못했다(네트워크·인증). 낡은 ref 로 판정하지 않는다"; exit 1; }
+    git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
+      || { bad "$BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; exit 1; }
+    BASE_REF="$BASE_REMOTE/$BASE_BRANCH"
+else
+    # 원격이 없으면 로컬 통합 브랜치로 잰다.
+    git rev-parse --verify -q "$BASE_BRANCH" >/dev/null \
+      || { bad "통합 브랜치 '$BASE_BRANCH' 가 로컬에도 없다"; exit 1; }
+    BASE_REF="$BASE_BRANCH"
+fi
 
-BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH") \
+BASE=$(git merge-base HEAD "$BASE_REF") \
   || { bad "merge-base 를 못 구했다"; exit 1; }
 
 N=$(git log --oneline "$BASE"..HEAD | wc -l | tr -d ' ')
@@ -112,12 +136,17 @@ git log --oneline "$BASE"..HEAD
 # 구현만·테스트만 있는 커밋 — 갈라진 것이다(규칙 2). 리팩터·문서는 예외.
 # 경로 요소·접미사로만 잡는다. 부분문자열로 보면 `ContestService.java` 가
 # 테스트로, `Foo.java` 가 소스로 잡혀 갈라진 커밋이 통과한다.
-TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)[^/]*([._-](test|spec)|Test|Tests|Spec|IT)\.[A-Za-z]+$'
+# 접미사·폴더뿐 아니라 **접두사**(pytest 의 `test_foo.py`, `spec_foo.rb`)도 본다.
+TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)(test|spec)[._-][^/]*$|(^|/)[^/]*([._-](test|spec)|Test|Tests|Spec|IT)\.[A-Za-z]+$'
 
 # 결과를 **파일로** 받는다. `while` 을 파이프 뒤에 두면 서브셸이라 거기서 세운
 # 값이 밖으로 안 나온다 — 그래서 갈라진 커밋을 찍고도 exit 0 이었다.
 SPLIT=$(mktemp)
 while read -r sha subject; do
+    # 커밋이 0개면 heredoc 에 개행 하나가 남아 이 루프가 **한 번 돈다.**
+    # 그대로 두면 빈 SHA 가 「갈라진 커밋」으로 기록돼 거짓 FAIL 이 났다
+    # (claude, PR #53).
+    [ -n "$sha" ] || continue
     case "$subject" in refactor:*|docs:*|chore:*) continue ;; esac
     files=$(git show --name-only --format= "$sha")
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)

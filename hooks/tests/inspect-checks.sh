@@ -107,10 +107,30 @@ git checkout -q --detach HEAD
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'detached HEAD 면 FAIL'
 printf '%s' "$(out_of)" | grep -q "detached" && r y y '무엇이 문제인지 알린다' || r y n '무엇이 문제인지 알린다'
 
-# Phase 6 에서 다시 부르면 지금 열린 PR 이 목록에 있다 — 그것 하나는 재사용이 아니다.
+# Phase 6 에서만 그 PR 하나를 뺀다. Phase 5 에서는 열린 PR 도 재사용이다 —
+# 얼린 PR 에 커밋을 얹는 것을 막아야 한다.
 fresh; git switch -qc feature/cur
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
-r 0 "$(GH_UPSTREAM=o/r GH_CUR=7 GH_PRIOR='' out_of >/dev/null 2>&1; echo $?)" '지금 열린 PR 하나는 재사용이 아니다'
+r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":7,"state":"OPEN"}' out_of >/dev/null 2>&1; echo $?)" \
+    'Phase 5 에서는 열린 PR 도 재사용이다'
+r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='' bash "$SCRIPT" main --phase6 7 >/dev/null 2>&1; echo $?)" \
+    'Phase 6 에서 넘긴 그 PR 하나는 예외다'
+
+echo "── claude 지적 (PR #53) ──"
+fresh; git switch -qc feature/none
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+# 열린 PR 이 없을 때 jq 가 깨져 재사용 검사가 통째로 무력해졌다.
+r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' out_of >/dev/null 2>&1; echo $?)" \
+    '열린 PR 이 없어도 옛 머지 PR 을 잡는다(jq 가 안 깨진다)'
+
+fresh; git switch -qc feature/zero
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '커밋이 0개면 거짓 FAIL 이 안 난다'
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y '빈 커밋을 갈라진 것으로 안 본다' || r n n '빈 커밋을 갈라진 것으로 안 본다'
+
+echo "── 접두사 테스트 파일명 (PR #53) ──"
+fresh; git switch -qc feature/prefix
+printf 'x\n' > foo.py; printf 't\n' > test_foo.py; git add .; git commit -qm "feat: pytest 관례"
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y 'test_foo.py 를 테스트로 본다' || r n n 'test_foo.py 를 테스트로 본다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
