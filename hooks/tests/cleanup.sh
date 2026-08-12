@@ -212,6 +212,16 @@ out=$(run); rc=$?
 r 1 "$rc" '원격이 다른 커밋을 가리키면 안 지운다'
 printf '%s' "$out" | grep -q "머지 뒤에 누가 push" && r y y '왜 멈췄는지 알린다' || r y n '왜 멈췄는지 알린다'
 
+echo "── codex 지적 (PR #56) ──"
+# 큐 대기 사이 다른 터미널이 로컬에 커밋을 얹으면 그것을 날리면 안 된다.
+fresh
+git remote set-url --push origin "$R/me/work"
+printf 'later\n' > later.txt; git add later.txt; git commit -qm "다른 터미널이 얹은 커밋"
+# GH_OID 는 리뷰된(= 하나 전) 커밋으로 둔다.
+out=$(GH_OID=$(git rev-parse HEAD~1) run); rc=$?
+r 1 "$rc" '로컬이 앞서 있으면 멈춘다(push 안 한 커밋을 안 날린다)'
+r "feature/x" "$(git branch --show-current)" '브랜치가 그대로 있다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

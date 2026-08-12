@@ -182,6 +182,26 @@ printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat
 r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' bash "$SCRIPT" main >/dev/null 2>&1; echo $?)" \
     '원격이 없으면 재사용 검사를 건너뛴다'
 
+echo "── codex 지적 (PR #56) ──"
+# gh repo view 실패를 삼키면 재사용 검사가 조용히 꺼진다.
+fresh; git switch -qc feature/ghfail
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+cat > "$BIN/gh" <<'GHF'
+#!/usr/bin/env bash
+exit 1
+GHF
+chmod +x "$BIN/gh"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'gh repo view 실패를 통과로 두지 않는다'
+put_gh
+
+# 기존 colocated 테스트의 단언만 고친 커밋.
+fresh; git switch -qc feature/edittest
+mkdir -p src; printf 'fn f(){}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert!(true); } }\n' > src/lib.rs
+git add .; git commit -qm "feat: 처음"
+printf 'fn f(){ }\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } }\n' > src/lib.rs
+git add .; git commit -qm "fix: 단언만 고친다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '기존 테스트의 단언만 고친 커밋도 예외'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

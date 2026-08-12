@@ -21,6 +21,11 @@ ok()  { printf 'PASS — %s\n' "$1"; }
 # detached HEAD 면 `--abbrev-ref` 가 문자열 "HEAD" 를 준다. 그것은 ASCII 이고
 # 보호 브랜치 이름과도 달라서 **그대로 통과한다** — 밀어 올릴 브랜치가 없는데.
 # inspect 는 커밋을 하나씩 체크아웃해 보므로 실제로 이 상태에 놓인다.
+# 원격이 있는지 본다. `git remote | grep -q` 로 쓰면 원격이 많을 때 파이프
+# 버퍼가 차고 grep 이 먼저 닫혀 SIGPIPE + pipefail 로 **있는데 없다고 나온다.**
+# 이 세션에서 같은 함정을 일곱 번 밟았다 — 파이프 뒤에는 -q 를 쓰지 않는다.
+has_remote() { [ "$(git remote | grep -cx "$1" || true)" -gt 0 ]; }
+
 BR=$(git symbolic-ref -q --short HEAD) \
   || { printf 'FAIL — detached HEAD 다. 기능 브랜치로 돌아온다: git switch -\n' >&2; exit 1; }
 
@@ -50,7 +55,7 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
 # 로컬 전용 저장소에서 Phase 5 가 늘 막힌다 — 이 저장소의 「근거 없으면 막지
 # 않는다」 원칙과 같다. 있는데 못 읽는 것은 다르다(그때는 실패).
 HEAD_OWNER=
-if git remote | grep -qx "$HEAD_REMOTE"; then
+if has_remote "$HEAD_REMOTE"; then
     HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
       || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
     HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
@@ -91,8 +96,13 @@ gh_out() {
 }
 
 UPSTREAM=
-[ -n "$HEAD_OWNER" ] && UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
-  -q '.parent.nameWithOwner // .nameWithOwner')
+if [ -n "$HEAD_OWNER" ]; then
+    # 실패를 삼키면 UPSTREAM 이 비어 「건너뛴다」 갈래로 빠지고 **재사용 검사가
+    # 조용히 꺼진다.** git fetch 인증은 되는데 gh 인증만 없는 경우가 실제로 있다.
+    UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
+      -q '.parent.nameWithOwner // .nameWithOwner') \
+      || { bad "gh 로 저장소를 못 읽었다(인증·네트워크). 재사용 검사를 통과로 두지 않는다"; exit 1; }
+fi
 if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
     # jq 안에서 빈 값을 그대로 펼치면 구문 오류가 나고, 그 실패를 삼키면
@@ -128,7 +138,7 @@ BASE_REMOTE=$(git remote | grep -x upstream \
 # 들어온 남의 커밋이 내 기능 커밋으로 세어진다 — 있으면 건너뛰던 것이 그 구멍이었다.
 # 갱신 실패를 넘기면 **낡은 ref 로 판정한다** — 그 사이 들어온 남의 커밋이
 # 내 기능 커밋으로 세어지고 접기 판정이 엉뚱해진다. 실패는 실패로 낸다.
-if git remote | grep -qx "$BASE_REMOTE"; then
+if has_remote "$BASE_REMOTE"; then
     # refspec 을 **명시한다.** --single-branch 클론은 fetch refspec 이 좁아
     # `git fetch origin main` 이 FETCH_HEAD 에만 쓰고 origin/main 을 안 만든다 —
     # 그러면 바로 아래 검증이 늘 실패해 그 환경에서 Phase 5 가 통째로 막힌다.
@@ -184,7 +194,13 @@ while read -r sha subject; do
 
     # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나
     # `fix: 잘못된 설명을 고친다` 가 빠져 README 하나 고친 커밋이 FAIL 이 됐다.
-    printf '%s\n' "$files" | grep -vE "$DOCPAT" | grep -q . || continue
+    #
+    # `grep -q` 를 쓰면 안 된다. 파일이 많아 파이프 버퍼가 차면 첫 비문서 경로에서
+    # 닫히고 앞쪽이 SIGPIPE 로 죽어, pipefail 이 141 을 돌려준다 —
+    # `|| continue` 가 그것을 「문서뿐」으로 읽어 **소스 커밋이 검사를 건너뛴다.**
+    # 이 세션에서 같은 함정을 일곱 번째 밟았다. 스트림을 끝까지 읽는다.
+    nondoc=$(printf '%s\n' "$files" | grep -vE "$DOCPAT" | grep -c . || true)
+    [ "$nondoc" -gt 0 ] || continue
 
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
     has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" | grep -c . || true)
@@ -195,9 +211,22 @@ while read -r sha subject; do
     # `grep -q` 를 쓰면 안 된다. 매치하자마자 닫혀 앞의 grep 이 SIGPIPE 로 죽고
     # `set -o pipefail` 이 그것을 파이프라인 실패로 읽어 **이 예외가 통째로
     # 안 걸린다.** 이 세션에서 같은 실수를 여섯 번째 한다.
-    if [ "$has_test" = 0 ] \
-       && git show --format= -U0 "$sha" | grep '^+' | grep -E "$INLINE_TEST" >/dev/null 2>&1; then
-        continue
+    #
+    # 표식이 **새로 추가된 줄**에만 있으면 기존 테스트의 단언을 고친 커밋이 걸린다.
+    # 그래서 바뀐 파일이 이미 테스트를 품고 있는지도 본다.
+    # (`grep -q` 를 쓰지 않는다 — 위와 같은 이유다.)
+    if [ "$has_test" = 0 ]; then
+        added_test=$(git show --format= -U0 "$sha" | grep '^+' \
+                       | grep -cE "$INLINE_TEST" || true)
+        holds_test=0
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            n=$(git show "$sha:$f" 2>/dev/null | grep -cE "$INLINE_TEST" || true)
+            [ "${n:-0}" -gt 0 ] && { holds_test=1; break; }
+        done <<FILEEOF
+$files
+FILEEOF
+        if [ "$added_test" -gt 0 ] || [ "$holds_test" = 1 ]; then continue; fi
     fi
 
     printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject" >> "$SPLIT"

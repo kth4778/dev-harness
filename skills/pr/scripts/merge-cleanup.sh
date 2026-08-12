@@ -159,11 +159,26 @@ url_nwo() {
       | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#\.git$##; s#/$##' \
       | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
 }
+# 호스트도 본다. `owner/repo` 만 맞추면 github.com 과 사내 GitLab 미러가
+# 같아 보여, GitHub PR 을 머지하고 **다른 서버의 동명 브랜치를 지운다**
+# (codex, PR #56).
+url_host() {
+    printf '%s' "$1" \
+      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#[:/].*$##' \
+      | tr '[:upper:]' '[:lower:]'
+}
 MY_NWO=$(url_nwo "$HEAD_URL")
+MY_HOST=$(url_host "$HEAD_URL")
 PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+# gh 가 향하는 호스트. 기본은 github.com 이다.
+GH_HOST=$(git remote get-url "$(git config "branch.$BASE.remote" || echo origin)" 2>/dev/null)
+GH_HOST=$(url_host "${GH_HOST:-github.com}")
 [ "$MY_NWO" = "$PR_NWO" ] \
     || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($HEAD_URL) 다
        — 다른 저장소의 동명 브랜치다"
+[ -z "$GH_HOST" ] || [ "$MY_HOST" = "$GH_HOST" ] \
+    || die "PR 은 $GH_HOST 의 것인데 내 push 대상은 $MY_HOST 다
+       — 같은 이름이지만 다른 서버다. 지우지 않는다"
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
 # origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
 # `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.
@@ -203,7 +218,10 @@ fi
 # 한 번에 셋을 읽는다(claude, PR #55).
 STRAT=--merge
 ALLOW=$(mktemp)
-bounded 30 gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
+# base 저장소의 설정을 읽는다. 인자 없이 부르면 현재 폴더의 저장소(fork)를
+# 보므로, fork 와 upstream 설정이 다르면 엉뚱한 전략을 고른다 (codex, PR #56).
+bounded 30 gh repo view ${BASE_NWO:+"$BASE_NWO"} \
+    --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
     -q '"\(.mergeCommitAllowed) \(.squashMergeAllowed) \(.rebaseMergeAllowed)"' \
     > "$ALLOW" 2>/dev/null
 read -r M_OK S_OK R_OK < "$ALLOW" || { M_OK=true; S_OK=true; R_OK=true; }
@@ -268,6 +286,14 @@ case $? in
     *)  rm "$RLS" 2>/dev/null; die "원격 조회 실패 — 지워졌는지 알 수 없어 로컬을 남긴다" ;;
 esac
 rm "$RLS" 2>/dev/null
+
+# 큐를 기다린 20분 사이에 다른 터미널이 이 브랜치에 커밋을 얹었을 수 있다.
+# 원격은 그대로여서 여기까지 왔지만, 그대로 지우면 **push 안 한 그 커밋이
+# 날아간다.** 지우기 직전에 다시 잰다 (codex, PR #56).
+NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
+[ "$NOW_OID" = "$REVIEWED" ] \
+    || die "로컬 $BR 이 ${NOW_OID:0:8} 로 옮겨졌다(리뷰된 것은 ${REVIEWED:0:8}).
+       그 사이 커밋이 얹혔다 — 지우지 않는다"
 
 if ! git branch -D "$BR" 2>/dev/null; then
     # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —
