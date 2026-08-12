@@ -37,8 +37,25 @@ r 0 "$(feed '"gh pr edit 20 --title \"제목만\""')"                   'gh pr e
 echo "── 갈래 3: 판정 근거가 없을 때 ──"
 r 2 "$(feed '"gh pr review 20"')"                                  '옵션 없는 review'
 r 2 "$(feed '"gh pr comment 20"')"                                 '본문 없는 comment (fail-closed)'
-r 2 "$(feed '"gh pr comment 20 --body-file /tmp/x.md"')"           '본문을 파일로 넘긴 comment'
+r 2 "$(feed '"gh pr comment 20 --body-file /tmp/없는파일.md"')"     '못 읽는 파일은 막는다(fail-closed)'
 r 0 "$(feed '""')"                                                 '빈 명령'
+
+echo "── 거짓 차단 (2026-08-13 실물) ──"
+# 홑따옴표는 셸에서 백틱·$ 가 안 먹혀 오히려 권장되는 인용법이다. 그런데
+# 쌍따옴표만 읽어서 본문이 비었고, fail-closed 로 봇 호출이 막혔다.
+r 0 "$(feed $'"gh pr comment 57 --body \'@codex review 한국어로\'"')"  '홑따옴표로 감싼 봇 토큰'
+r 2 "$(feed $'"gh pr comment 57 --body \'이 부분이 틀렸습니다\'"')"    '홑따옴표라도 리뷰 내용은 막는다'
+r 0 "$(feed '"gh pr comment 57 --body=\"@claude review 한국어로\""')"  '--body= 붙임표 형태'
+r 0 "$(feed '"cd /somewhere && gh pr comment 57 --body \"@codex review\""')" '앞에 cd 가 붙어도 읽는다'
+
+# 파일로 넘긴 본문은 파일을 열어 판정한다. 못 읽으면 막는다(위 갈래).
+TMPB=$(mktemp -d)
+printf '@codex review 한국어로\n' > "$TMPB/bot.txt"
+printf '여기 버그가 있습니다\n'    > "$TMPB/review.txt"
+r 0 "$(feed "\"gh pr comment 57 --body-file $TMPB/bot.txt\"")"     '파일 안이 봇 토큰이면 통과'
+r 2 "$(feed "\"gh pr comment 57 --body-file $TMPB/review.txt\"")"  '파일 안이 리뷰 내용이면 막는다'
+r 0 "$(feed "\"gh pr comment 57 -F $TMPB/bot.txt\"")"             '-F 짧은 형태도 읽는다'
+rm -rf "$TMPB"
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

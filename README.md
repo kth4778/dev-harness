@@ -45,7 +45,7 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 | 훅 | 이벤트 | 막는 것 |
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 **제목** + 워크플로우 + 2층 CLAUDE.md + 3층 **경로** 주입 |
-| `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
+| `pr-guard` | PreToolUse(Bash) | 사람 계정으로 PR에 리뷰·코멘트를 쓰는 명령 (규칙 10). 봇 호출 토큰만 통과. 본문은 홑따옴표·쌍따옴표·파일 세 형태를 다 읽는다 |
 | `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) · 실행 비트 없는 훅 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `secret-guard` | PreToolUse(Bash) | 시크릿(AWS 키·토큰·개인키)이 든 커밋 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
@@ -221,7 +221,7 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                시험 204개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 211개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2

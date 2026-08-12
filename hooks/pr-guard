@@ -35,10 +35,37 @@ gh는 저장소 소유자 토큰으로 인증되어 있다. 이 명령을 실행
 # 다른 설정 통로가 없다) 토큰 뒤 "한국어로"만 붙일 수 있게 연다.
 # 그 외의 글자는 여전히 리뷰 내용으로 보고 막는다 — 목록을 좁게 유지하는 것이
 # 이 가드의 전부다.
+#
+# 본문을 **쌍따옴표 하나만** 보고 읽고 있었다. 홑따옴표로 감싸면 — 셸에서
+# 백틱과 $ 가 안 먹혀 오히려 권장되는 인용법이다 — 본문이 비어 fail-closed 로
+# 걸린다. 2026-08-13 에 실물로 겪었다: 봇 호출 토큰을 홑따옴표로 넘겼더니
+# 막혀서 봇을 부를 수 없었다. 파일로 넘기는 형태도 같은 이유로 막혔다.
+#
+# 거짓 차단은 사람이 훅을 끄게 만든다 (RULES.md 「훅을 고칠 때」절). 세 형태를 다 읽는다.
 is_bot_trigger() {
-    local body
-    body=$(printf '%s' "$flat" | sed -n 's/.*--body[= ]*"\([^"]*\)".*/\1/p')
-    [ -z "$body" ] && body=$(printf '%s' "$flat" | sed -n "s/.*-b[= ]*\"\([^\"]*\)\".*/\1/p")
+    local seg body f
+    # 이 서브커맨드 뒤쪽만 본다. 앞에 붙은 `cd ... &&` 는 볼 필요가 없다.
+    seg=$(printf '%s' "$flat" | sed -n "s/.*gh[[:space:]]\{1,\}pr[[:space:]]\{1,\}comment//p")
+    case "$seg" in
+        *--body-file*|*" -F "*|*" -F="*)
+            f=$(printf '%s' "$seg" \
+                  | sed -E "s/.*(--body-file|-F)[=[:space:]]*['\"]?([^'\"[:space:]]+).*/\2/")
+            # 파일을 못 읽으면 막는다. 내용을 모르는 채로 통과시킬 수 없다.
+            [ -n "$f" ] && [ -r "$f" ] || return 1
+            body=$(cat "$f") || return 1
+            ;;
+        *)
+            body=$(printf '%s' "$seg" | sed -E "s/.*(--body|-b)[=[:space:]]*//")
+            # 인용부호가 있으면 그 안쪽만, 없으면 줄 끝까지. 넘치게 읽어도
+            # 토큰과 안 맞아 차단되므로 fail-closed 방향이다.
+            case "$body" in
+                "'"*) body=$(printf '%s' "$body" | sed -E "s/^'//; s/'.*$//") ;;
+                '"'*)  body=$(printf '%s' "$body" | sed -E 's/^"//; s/".*$//') ;;
+            esac
+            ;;
+    esac
+    # 줄바꿈은 지운다 — 파일로 넘기면 끝에 붙는다.
+    body=$(printf '%s' "$body" | tr '\n' ' ')
     [ -z "$body" ] && return 1   # 본문을 못 읽으면 막는다 (fail-closed)
     body=$(printf '%s' "$body" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     case "$body" in
@@ -52,7 +79,7 @@ is_bot_trigger() {
 # GitHub에 리뷰로 기록되지 않는다 — 규칙 10이 겨냥하는 것이 아니다.
 # 막아 두니 PR을 올린 뒤 설명의 오타 하나도 고칠 수 없었다. 2026-08-11에
 # 실물로 겪었다: 본문의 백틱이 셸에 먹혀 첫 줄이 깨졌는데 되돌릴 방법이 없었다.
-# 거짓 차단은 사람이 훅을 끄게 만든다 (RULES.md 242절).
+# 거짓 차단은 사람이 훅을 끄게 만든다 (RULES.md 「훅을 고칠 때」절).
 case "$flat" in
     *"gh pr review"*)      deny "gh pr review" ;;
     *"gh issue comment"*)  deny "gh issue comment" ;;
