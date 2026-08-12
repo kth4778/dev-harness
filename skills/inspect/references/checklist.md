@@ -32,7 +32,11 @@ printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C
 # upstream 의 남의 커밋이 내 기능 커밋으로 세어진다.
 BASE_REMOTE=$(git remote | grep -x upstream \
   || git config "branch.$BASE_BRANCH.remote" || echo origin)
-git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null || BASE_REMOTE=origin
+# ref 가 없으면 **가져온다.** origin 으로 조용히 떨어지면 안 된다 — 그 낡은
+# 것이 바로 위에서 말한 문제의 원인이다. 못 가져오면 멈추고 사람에게 알린다.
+git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
+  || git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" \
+  || { echo "FAIL: $BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; }
 BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH")
 ```
 

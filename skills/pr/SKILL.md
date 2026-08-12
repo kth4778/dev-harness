@@ -26,12 +26,12 @@ description: 전수 검사가 전부 PASS한 뒤 PR을 올리고 봇 리뷰에 �
 줄 수가 많아 불안하면 그건 **기능이 하나가 맞는지** 다시 볼 신호이지,
 쪼갤 신호가 아니다. 실제로 둘 이상이면 다음 세션으로 미룬다.
 
-## 1. 커밋 정리
+## 1. 커밋 정리 — 여기서는 확인만 한다
 
 `inspect`에서 커밋 단위가 PASS했으면 건드리지 않는다.
 
-정리가 필요하면 지금 한다. 다만 **커밋을 만들 때부터 단일 목적**이어야 한다 —
-나중에 재구성하면 "커밋 시점에 테스트가 통과했다"는 보장이 깨진다.
+**정리가 남아 있으면 Phase 5로 돌아간다.** 여기서 고쳐 쓰면 이미 검사를
+통과한 이력이 검사 없이 바뀐다. 접는 자리는 Phase 5 한 곳이다(규칙 2).
 
 ## 2. PR 생성
 
@@ -215,75 +215,28 @@ git log --oneline "$BASE"..HEAD          # 세어만 본다
 `_workspace`의 진행 기록은 **커밋 제목**으로 가리킨다 — 아래 스쿼시 절이
 같은 이유로 요구하는 것과 같다. 해시가 이미 적혀 있으면 접은 뒤 갱신한다.
 
-### 🔴 접은 커밋은 스쿼시 머지하지 않는다 — 머지 커밋으로 한다
+### 🔴 머지와 정리는 스크립트로 한다
 
 ```bash
-gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
+skills/pr/scripts/merge-cleanup.sh <PR번호> [통합브랜치]
 ```
 
-**`--delete-branch`를 붙인다.** 머지된 브랜치가 남아 있으면 다음 세션이 그것을
-재사용한다 — 2026-08-11에 실제로 그렇게 됐고, PR 없이 원격에만 뜬 커밋을
-이틀 뒤에야 발견했다. 지우면 재사용할 대상 자체가 없다(규칙 1).
+**손으로 치지 않는다.** 이 절차를 문서 안 코드 블록으로 두었다가 같은 실수를
+네 번 냈다 — 블록마다 새 셸이라 앞에서 정한 변수가 없었고, 문서라서 한 번도
+안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **14갈래를 실제로 잰다.**
 
-> **merge queue를 쓰는 저장소는 이 플래그를 못 쓴다.** `gh`가
-> `Cannot use '-d' or '--delete-branch' when merge queue enabled`로 거부한다 —
-> 큐에 들어간 PR은 머지 경로가 달라 그 자리에서 지울 수 없다. 그때는 플래그를
-> 빼고 올린 뒤, **큐가 머지를 끝낸 다음** 따로 지운다.
->
-> ```bash
-> # 큐에 넣는 요청도 멈출 수 있다. 아래 pr_state 와 같은 방식으로 감싼다.
-> bounded() { local pid n=0; "$@" & pid=$!
->   while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 1; n=$((n+1)); done
->   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
-> bounded gh pr merge <N> --merge              # 큐에 넣는다
->
-> # 큐가 끝날 때까지 기다리되 **무한정 기다리지 않는다.** 필수 체크가 끝내
-> # 통과 못 하거나 큐에서 빠지면 MERGED 가 영영 안 되고, 그러면 이 스킬이
-> # 통째로 멈춘다. gh pr merge 는 체크가 아직이면 auto-merge 를 켜 둘 뿐이다.
-> # 요청 하나에도 시한을 건다. 반복 횟수만 세면 **응답이 안 오는 한 번**에
-> # 영영 붙잡힌다 — gh 에는 요청 타임아웃 옵션이 없고 macOS 에는 timeout(1) 이
-> # 없다. 백그라운드로 띄우고 직접 재서 죽인다.
-> pr_state() {
->   local out pid n=0
->   out=$(mktemp)
->   gh pr view "$1" --json state -q .state > "$out" 2>/dev/null &
->   pid=$!
->   while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 1; n=$((n+1)); done
->   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
->   cat "$out"; rm -f "$out"
-> }
->
-> DEADLINE=$(( $(date +%s) + 1200 ))          # 20분
-> ST=
-> while [ "$(date +%s)" -lt "$DEADLINE" ]; do
->   ST=$(pr_state <N>)
->   [ "$ST" = "MERGED" ] && break
->   [ "$ST" = "CLOSED" ] && { echo "닫혔다 — 정리하지 않는다"; break; }
->   sleep 20
-> done
->
-> if [ "$ST" = "MERGED" ]; then
->   # switch 가 실패하면(워킹트리 변경 등) 멈춘다. 그대로 가면 브랜치에 남은
->   # 채로 삭제를 시도해 로컬이 안 지워진다.
->   if git switch "$BASE"; then
->     # 원격에 이미 없으면 성공으로 친다 — 머지 후 head 를 자동 삭제하는 설정이
->     # 흔하고, 그때 --delete 는 실패로 끝난다. 그 실패를 그대로 받으면 로컬
->     # 브랜치가 남아 재사용 대상이 된다.
->     if git ls-remote --exit-code --heads "$REMOTE" "$BR" >/dev/null 2>&1; then
->       git push "$REMOTE" --delete "$BR" || { echo "원격 삭제 실패 — 로컬도 남긴다"; false; }
->     fi && git branch -D "$BR"
->   fi
-> else
->   echo "머지가 안 끝났다($ST). 큐와 체크를 확인하고 정리는 나중에"
-> fi
-> ```
->
-> **브랜치를 옮긴 뒤에 지운다.** 체크아웃된 브랜치는 git이 삭제를 거부한다.
-> `$BASE`는 이 파일 위쪽에서 정의한 통합 브랜치다 — 다른 파일의 `BASE_BRANCH`를
-> 빌려 쓰면 빈 문자열이 되어 `git switch ""`가 실패하고, **그러면 브랜치에 남은
-> 채로 다음 줄도 실패한다.**
-> 원격도 `origin`으로 박지 않는다 — fork에서는 push 대상이 다르고, 그대로
-> 두면 **정작 PR의 head 브랜치가 안 지워진다.**
+스크립트가 하는 일:
+
+| | |
+|---|---|
+| 머지 | `--merge`(스쿼시 아님). merge queue가 `--delete-branch`를 거부하면 플래그를 빼고 넣은 뒤 큐가 끝나기를 기다린다 |
+| 시한 | 요청마다 30초, 큐 대기는 20분. `gh`·`git` 둘 다 타임아웃 옵션이 없고 macOS에는 `timeout(1)`이 없어 직접 잰다 |
+| 정리 | 통합 브랜치로 옮긴 **뒤** 원격·로컬 브랜치를 지운다. head를 올린 원격은 머지 **전에** 잡아둔다 — `--delete-branch`가 로컬을 지우고 나면 못 구한다 |
+| 멈추는 곳 | 큐에 못 넣음 · 머지가 안 끝남 · 브랜치 이동 실패 · 원격 조회 실패. **그때는 아무것도 안 지운다** |
+
+원격 브랜치가 **이미 없으면 성공으로 친다** — 머지 후 head를 자동 삭제하는
+설정이 흔하다. 다만 `ls-remote`가 인증·전송 문제로 실패한 것과는 구분한다
+(`--exit-code`의 2만 「없음」이다).
 
 **스쿼시는 커밋 전부를 한 줄로 접는다.** 그러면 두 가지가 같이 사라진다.
 
