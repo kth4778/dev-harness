@@ -17,8 +17,9 @@ r() { if [ "$1" = "$2" ]; then pass=$((pass+1)); printf '  [OK ] '; else fail=$(
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
 case "$*" in
-  *"repo view"*) printf '%s\n' "${GH_UPSTREAM:-}" ;;
-  *"pr list"*)   printf '%s\n' "${GH_PRIOR:-}" ;;
+  *"repo view"*)             printf '%s\n' "${GH_UPSTREAM:-}" ;;
+  *"pr list"*"--state open"*) printf '%s\n' "${GH_CUR:-}" ;;
+  *"pr list"*)               printf '%s\n' "${GH_PRIOR:-}" ;;
 esac
 GH
 chmod +x "$BIN/gh"; export PATH="$BIN:$PATH"
@@ -59,8 +60,10 @@ echo "── 갈라진 커밋을 짚는다 ──"
 fresh; git switch -qc feature/split
 printf 'x\n' > src.txt; git add src.txt; git commit -qm "feat: 구현만"
 printf 't\n' > src_test.txt; git add src_test.txt; git commit -qm "test: 검사만"
-o=$(out_of); printf '%s' "$o" | grep -q "갈라진 커밋" && r y y '구현만·테스트만 있는 커밋을 짚는다' || r y n '구현만·테스트만 있는 커밋을 짚는다'
+o=$(out_of); rc_split=$(out_of >/dev/null 2>&1; echo $?)
+printf '%s' "$o" | grep -q "갈라진 커밋" && r y y '구현만·테스트만 있는 커밋을 짚는다' || r y n '구현만·테스트만 있는 커밋을 짚는다'
 printf '%s' "$o" | grep -q "구현만" && r y y '어느 커밋인지 알린다' || r y n '어느 커밋인지 알린다'
+r 1 "$rc_split" '**찍기만 하지 않고 FAIL 로 끝난다**'
 
 echo "── 리팩터·문서는 예외 ──"
 fresh; git switch -qc feature/refactor
@@ -83,6 +86,7 @@ echo "── codex 지적 (PR #51) ──"
 fresh; git switch -qc feature/contest
 printf 'x\n' > ContestService.java; git add .; git commit -qm "feat: 구현만"
 o=$(out_of); printf '%s' "$o" | grep -q "갈라진 커밋" && r y y 'ContestService.java 는 테스트가 아니다' || r y n 'ContestService.java 는 테스트가 아니다'
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '그 커밋 때문에 FAIL 로 끝난다'
 
 fresh; git switch -qc feature/suffix
 printf 'x\n' > Foo.java; printf 't\n' > FooTest.java; git add .; git commit -qm "feat: 짝"
@@ -95,6 +99,18 @@ printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y 'test/ 폴더도 �
 echo "── 통합 브랜치 자체를 거부한다 ──"
 fresh; git switch -qc release; printf 'x\n' > f.txt; git add f.txt; git commit -qm work
 r 1 "$(out_of release >/dev/null 2>&1; echo $?)" '인자로 받은 release 에서 작업하면 FAIL'
+
+echo "── codex 지적 (PR #52) ──"
+fresh; git switch -qc feature/det
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+git checkout -q --detach HEAD
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'detached HEAD 면 FAIL'
+printf '%s' "$(out_of)" | grep -q "detached" && r y y '무엇이 문제인지 알린다' || r y n '무엇이 문제인지 알린다'
+
+# Phase 6 에서 다시 부르면 지금 열린 PR 이 목록에 있다 — 그것 하나는 재사용이 아니다.
+fresh; git switch -qc feature/cur
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+r 0 "$(GH_UPSTREAM=o/r GH_CUR=7 GH_PRIOR='' out_of >/dev/null 2>&1; echo $?)" '지금 열린 PR 하나는 재사용이 아니다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

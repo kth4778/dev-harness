@@ -18,15 +18,38 @@ r() { if [ "$1" = "$2" ]; then pass=$((pass+1)); printf '  [OK ] '; else fail=$(
 # 가짜 gh. 환경변수로 행동을 바꾼다.
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
+# 봇 증거 채널을 흉내 낸다. 스크립트는 리뷰 → 리뷰코멘트 → 이슈코멘트·반응
+# 순으로 찾으므로, 어느 채널에 무엇을 놓는지가 갈래를 만든다.
+#   GH_CH_CODEX / GH_CH_CLAUDE : review | comment | reaction | none
+#   GH_REVIEWED / GH_REVIEWED_CLAUDE : 그 봇이 본 커밋(기본 현재 head)
+ch()  { case "$1" in codex) printf '%s' "${GH_CH_CODEX:-review}" ;;
+                     claude) printf '%s' "${GH_CH_CLAUDE:-review}" ;; esac; }
+oid() { case "$1" in codex) printf '%s' "${GH_REVIEWED:-$GH_OID}" ;;
+                     claude) printf '%s' "${GH_REVIEWED_CLAUDE:-${GH_REVIEWED:-$GH_OID}}" ;; esac; }
 case "$1" in
   api)
     case "$*" in
-      */reviews*)
-        [ -n "${GH_NO_REVIEW:-}" ] && exit 0
-        # 봇 둘이 각각 어느 커밋을 리뷰했는지. 기본은 현재 head.
-        printf 'chatgpt-codex-connector[bot] %s\n' "${GH_REVIEWED:-$GH_OID}"
-        printf 'claude[bot] %s\n' "${GH_REVIEWED_CLAUDE:-${GH_REVIEWED:-$GH_OID}}"
-        exit 0 ;;
+      */commits/*)  printf '%s\n' "${GH_HEAD_TIME:-2020-01-01T00:00:00Z}"; exit 0 ;;
+      */pulls/*/reviews*)
+        for b in codex claude; do
+          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          [ "$(ch $b)" = review ] && printf '%s\n' "$(oid $b)"
+        done; exit 0 ;;
+      */pulls/*/comments*)
+        for b in codex claude; do
+          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          [ "$(ch $b)" = comment ] && printf '%s\n' "$(oid $b)"
+        done; exit 0 ;;
+      */issues/*/comments*)
+        for b in codex claude; do
+          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          [ "$(ch $b)" = icomment ] && printf '%s\n' "${GH_EV_TIME:-2030-01-01T00:00:00Z}"
+        done; exit 0 ;;
+      */issues/*/reactions*)
+        for b in codex claude; do
+          printf '%s' "$*" | grep -q "\"$b\"" || continue
+          [ "$(ch $b)" = reaction ] && printf '%s\n' "${GH_EV_TIME:-2030-01-01T00:00:00Z}"
+        done; exit 0 ;;
       *) printf '%s\n' "${GH_BASE_NWO:-}" ; exit 0 ;;   # base repo full_name
     esac ;;
 esac
@@ -122,7 +145,7 @@ echo "── 리뷰가 붙은 커밋에 고정한다 ──"
 fresh; out=$(GH_REVIEWED=0123456789abcdef0123 run); rc=$?
 r 1 "$rc" '리뷰가 다른 커밋에 붙어 있으면 멈춘다(리뷰 뒤 push)'
 printf '%s' "$out" | grep -q "아무도 안 봤다" && r y y '그 커밋이 리뷰를 못 받았다고 알린다' || r y n '그 커밋이 리뷰를 못 받았다고 알린다'
-fresh; out=$(GH_NO_REVIEW=1 run); rc=$?
+fresh; out=$(GH_CH_CODEX=none GH_CH_CLAUDE=none run); rc=$?
 r 1 "$rc" '리뷰가 아예 없으면 멈춘다'
 
 echo "── 봇 둘이 각각 head 를 리뷰했는지 본다 (PR #51) ──"
@@ -134,6 +157,23 @@ echo "── head 저장소를 대조한다 ──"
 fresh; out=$(GH_OWNER=other run); rc=$?
 r 1 "$rc" 'PR head 가 다른 저장소면 멈춘다'
 r "feature/x" "$(git branch --show-current)" '내 브랜치를 안 지운다'
+
+echo "── 봇 증거가 리뷰 아닌 채널로 올 때 (PR #52) ──"
+# 실제로 PR #33 은 codex 가 반응만, claude 가 이슈 코멘트만 남겼다.
+fresh; out=$(GH_CH_CODEX=reaction GH_CH_CLAUDE=icomment run); rc=$?
+r 0 "$rc" '반응·코멘트만 있어도 통과한다'
+r "" "$(git branch --list feature/x)" '정리가 끝났다'
+
+fresh; out=$(GH_CH_CODEX=comment GH_CH_CLAUDE=review run); rc=$?
+r 0 "$rc" '인라인 리뷰 코멘트도 증거로 본다'
+
+# head 보다 **앞선** 시각의 반응은 그 커밋을 본 것이 아니다.
+fresh; out=$(GH_CH_CODEX=reaction GH_EV_TIME=2019-01-01T00:00:00Z run); rc=$?
+r 1 "$rc" 'head 보다 앞선 반응은 증거가 아니다'
+
+echo "── head 저장소를 정확히 대조한다 ──"
+fresh; out=$(GH_REPO=work-backup run); rc=$?
+r 1 "$rc" 'me/work 와 me/work-backup 을 가른다(부분문자열 아님)'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

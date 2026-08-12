@@ -72,20 +72,59 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
 # `--match-head-commit` 이 무의미하다 — 리뷰 뒤에 push 됐다면 그 새 커밋이
 # 이미 head 이기 때문이다. 이 워크플로에는 synchronize 가 없어 **그 커밋은
 # 리뷰를 못 받는다.**
-# **봇 둘이 각각 현재 head 를 리뷰했는지** 본다. 마지막 리뷰의 커밋만 보면
-# 봇이 옛 SHA 를 리뷰하고 누가 push 한 뒤 다른 사람이 새 head 를 리뷰했을 때
-# 통과한다 — 그 코드는 봇이 안 봤다.
-REVIEWS=$(mktemp)
-bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
-    -q '.[] | "\(.user.login) \(.commit_id)"' > "$REVIEWS" 2>/dev/null \
-    || { rm "$REVIEWS" 2>/dev/null; die "리뷰 목록을 못 읽었다"; }
+# **봇 둘이 각각 현재 head 를 봤는지** 확인한다.
+#
+# 증거는 세 채널로 온다 — 리뷰가 전부가 아니다.
+#   리뷰      가장 좋다. commit_id 가 붙어 있어 SHA 로 바로 대조된다
+#   코멘트    claude 워크플로가 --comment 로 돌면 여기로 온다. SHA 가 없다
+#   반응(👍)  codex 가 지적할 것이 없으면 이것만 남긴다. SHA 가 없다
+#
+# 실제로 PR #33 은 codex 가 반응만, claude 가 코멘트만 남겼다 — 리뷰 목록만
+# 보면 **그 PR 은 영원히 머지할 수 없다.**
+#
+# SHA 가 없는 채널은 **시각**으로 판정한다. head 커밋이 올라간 뒤에 남은
+# 증거면 그 커밋을 보고 남긴 것이다.
+HEAD_TIME=$(bounded 30 gh api "repos/{owner}/{repo}/commits/$PR_OID" \
+    -q '.commit.committer.date' 2>/dev/null) || HEAD_TIME=
+
+seen_bot() {                       # $1 = 봇 이름 조각
+    local bot="$1" f
+    f=$(mktemp)
+
+    # 1) 리뷰 — SHA 로 대조
+    bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
+        -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .commit_id" \
+        > "$f" 2>/dev/null
+    grep -qx "$PR_OID" "$f" && { rm "$f" 2>/dev/null; return 0; }
+
+    # 2) 인라인 리뷰 코멘트 — SHA 로 대조
+    bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/comments" \
+        -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .commit_id" \
+        > "$f" 2>/dev/null
+    grep -qx "$PR_OID" "$f" && { rm "$f" 2>/dev/null; return 0; }
+
+    # 3) 이슈 코멘트·반응 — SHA 가 없으니 head 이후 시각으로 본다
+    if [ -n "$HEAD_TIME" ]; then
+        bounded 30 gh api "repos/{owner}/{repo}/issues/$PR/comments" \
+            -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .created_at" \
+            > "$f" 2>/dev/null
+        bounded 30 gh api "repos/{owner}/{repo}/issues/$PR/reactions" \
+            -q ".[] | select(.user.login | ascii_downcase | contains(\"$bot\")) | .created_at" \
+            >> "$f" 2>/dev/null
+        while read -r t; do
+            [ -n "$t" ] && [ "$t" \> "$HEAD_TIME" ] && { rm "$f" 2>/dev/null; return 0; }
+        done < "$f"
+    fi
+
+    rm "$f" 2>/dev/null
+    return 1
+}
+
 MISSING=
 for bot in ${REQUIRED_BOTS:-codex claude}; do
-    grep -i "$bot" "$REVIEWS" | awk '{print $2}' | grep -qx "$PR_OID" \
-        || MISSING="$MISSING $bot"
+    seen_bot "$bot" || MISSING="$MISSING $bot"
 done
-rm "$REVIEWS" 2>/dev/null
-[ -z "$MISSING" ] || die "봇 리뷰가 현재 head(${PR_OID:0:8})에 없다:$MISSING
+[ -z "$MISSING" ] || die "봇이 현재 head(${PR_OID:0:8})를 본 증거가 없다:$MISSING
        리뷰 뒤에 push 됐거나 아직 안 돌았다 — 그 커밋은 아무도 안 봤다.
        새 브랜치로 다시 올린다(규칙 7)"
 REVIEWED="$PR_OID"
@@ -98,9 +137,20 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || echo origin)
 HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
     || die "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다"
-printf '%s' "$HEAD_URL" | grep -qi "$PR_OWNER/$PR_REPO" \
-    || die "PR #$PR 의 head 는 $PR_OWNER/$PR_REPO 인데
-       내 push 대상은 $HEAD_URL 이다 — 다른 저장소의 동명 브랜치다"
+
+# URL 을 `owner/repo` 로 **정규화해서 정확히** 비교한다. 부분문자열로 보면
+# `me/work` 가 `me/work-backup` 에, `bob/h` 가 `alicebob/h` 에 들어맞아
+# **엉뚱한 원격에서 브랜치를 지운다.**
+url_nwo() {
+    printf '%s' "$1" \
+      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#\.git$##; s#/$##' \
+      | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
+}
+MY_NWO=$(url_nwo "$HEAD_URL")
+PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+[ "$MY_NWO" = "$PR_NWO" ] \
+    || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($HEAD_URL) 다
+       — 다른 저장소의 동명 브랜치다"
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
 # origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
 # `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.

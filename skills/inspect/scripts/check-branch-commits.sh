@@ -13,7 +13,11 @@ FAIL=0
 bad() { printf 'FAIL — %s\n' "$1" >&2; FAIL=1; }
 ok()  { printf 'PASS — %s\n' "$1"; }
 
-BR=$(git rev-parse --abbrev-ref HEAD)
+# detached HEAD 면 `--abbrev-ref` 가 문자열 "HEAD" 를 준다. 그것은 ASCII 이고
+# 보호 브랜치 이름과도 달라서 **그대로 통과한다** — 밀어 올릴 브랜치가 없는데.
+# inspect 는 커밋을 하나씩 체크아웃해 보므로 실제로 이 상태에 놓인다.
+BR=$(git symbolic-ref -q --short HEAD) \
+  || { printf 'FAIL — detached HEAD 다. 기능 브랜치로 돌아온다: git switch -\n' >&2; exit 1; }
 
 # ── 1. 브랜치 전략 ──────────────────────────────────────────────
 [ -n "$BASE_BRANCH" ] \
@@ -65,12 +69,21 @@ gh_out() { local o; o=$(mktemp); bounded 30 "$@" > "$o" 2>/dev/null; cat "$o"; r
 UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
   -q '.parent.nameWithOwner // .nameWithOwner')
 if [ -n "$UPSTREAM" ]; then
+    # **지금 열려 있는 PR 하나는 뺀다.** Phase 6 에서 이 스크립트를 다시 부르면
+    # 그 PR 이 목록에 있어 「재사용」으로 잡힌다 — 정상 흐름이 늘 FAIL 이 된다.
+    # 그 하나를 빼도 안전하다: 열린 PR 이 둘 이상이거나 머지·닫힌 것이 있으면
+    # 여전히 걸린다.
+    CUR=$(gh_out gh pr list --repo "$UPSTREAM" --state open --head "$BR" --limit 10 \
+      --json number -q '.[0].number // empty')
     PRIOR=$(gh_out gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
       --json number,state,headRepositoryOwner \
       -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
-             == (\"$HEAD_OWNER\" | ascii_downcase))] | .[0] // empty" 2>/dev/null)
+             == (\"$HEAD_OWNER\" | ascii_downcase))
+            | select(.number != ($CUR // -1))] | .[0] // empty" 2>/dev/null)
     if [ -n "$PRIOR" ]; then
         bad "이 브랜치로 이미 PR 이 열렸다: $PRIOR — 통합 브랜치에서 새로 판다"
+    elif [ -n "$CUR" ]; then
+        ok "이 브랜치의 PR 은 지금 열린 #$CUR 하나다"
     else
         ok "이 브랜치로 열린 PR 이 없다"
     fi
@@ -83,8 +96,10 @@ fi
 # origin/<base> 는 대개 낡아서, 그것으로 재면 남의 커밋이 내 것으로 세어진다.
 BASE_REMOTE=$(git remote | grep -x upstream \
   || git config "branch.$BASE_BRANCH.remote" || echo origin)
+# ref 가 **있어도** 가져온다. 낡은 것으로 merge-base 를 재면 그 사이 upstream 에
+# 들어온 남의 커밋이 내 기능 커밋으로 세어진다 — 있으면 건너뛰던 것이 그 구멍이었다.
+bounded 30 git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" 2>/dev/null
 git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
-  || git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" 2>/dev/null \
   || { bad "$BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; exit 1; }
 
 BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH") \
@@ -95,17 +110,28 @@ printf '커밋 %s개 (%s..HEAD)\n' "$N" "${BASE:0:8}"
 git log --oneline "$BASE"..HEAD
 
 # 구현만·테스트만 있는 커밋 — 갈라진 것이다(규칙 2). 리팩터·문서는 예외.
-git log --format='%H %s' "$BASE"..HEAD | while read -r sha subject; do
+# 경로 요소·접미사로만 잡는다. 부분문자열로 보면 `ContestService.java` 가
+# 테스트로, `Foo.java` 가 소스로 잡혀 갈라진 커밋이 통과한다.
+TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)[^/]*([._-](test|spec)|Test|Tests|Spec|IT)\.[A-Za-z]+$'
+
+# 결과를 **파일로** 받는다. `while` 을 파이프 뒤에 두면 서브셸이라 거기서 세운
+# 값이 밖으로 안 나온다 — 그래서 갈라진 커밋을 찍고도 exit 0 이었다.
+SPLIT=$(mktemp)
+while read -r sha subject; do
     case "$subject" in refactor:*|docs:*|chore:*) continue ;; esac
     files=$(git show --name-only --format= "$sha")
-    # 경로 요소·접미사로만 잡는다. 부분문자열로 보면 `ContestService.java` 가
-    # 테스트로, `Foo.java` 가 소스로 잡혀 **갈라진 커밋이 통과한다.**
-    TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)[^/]*([._-](test|spec)|Test|Tests|Spec|IT)\.[A-Za-z]+$'
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
     has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" | grep -c . || true)
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
-    printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject"
-done
+    printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject" >> "$SPLIT"
+done <<SPLITEOF
+$(git log --format='%H %s' "$BASE"..HEAD)
+SPLITEOF
+if [ -s "$SPLIT" ]; then
+    cat "$SPLIT" >&2
+    bad "구현만·테스트만 있는 커밋이 있다 — 하나로 합친다(규칙 2)"
+fi
+rm "$SPLIT" 2>/dev/null
 
 # 같은 파일을 세 번 이상 건드린 커밋들 — 한 자리를 여러 번 고쳤다는 신호.
 printf '\n같은 파일을 반복해 건드린 횟수:\n'
