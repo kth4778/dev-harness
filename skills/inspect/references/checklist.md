@@ -23,7 +23,14 @@ printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C
 
 # SKILL.md 의 BASE 도 이 값에서 유도한다. origin/HEAD 로 잡으면 develop 을 쓰는
 # 저장소에서 엉뚱한 조상을 기준으로 아래 판정들이 돈다.
-BASE=$(git merge-base HEAD "origin/$BASE_BRANCH")
+#
+# 원격 이름도 origin 으로 박지 않는다. fork 에서는 통합 브랜치가 upstream 에
+# 있고 origin/main 은 낡아 있다 — 그대로 재면 **upstream 의 남의 커밋이 내
+# 기능 커밋으로 세어지고**, 아래 모든 `$BASE..HEAD` 판정이 그 범위로 돈다.
+BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" || echo origin)
+git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
+  || BASE_REMOTE=$(git remote | grep -x upstream || echo origin)
+BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH")
 ```
 
 **뭐라도 나오면 FAIL이다.** `anthropics/claude-code-action`이 **base** 이름을
@@ -55,7 +62,7 @@ UPSTREAM=$(gh repo view --json parent,nameWithOwner \
 # 소유자 비교는 대소문자를 무시한다 — GitHub 로그인은 안 가리는데 문자열은 가린다.
 gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
   --json number,title,state,headRepositoryOwner \
-  -q ".[] | select((.headRepositoryOwner.login | ascii_downcase) == (\"$HEAD_OWNER\" | ascii_downcase))"
+  -q ".[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase) == (\"$HEAD_OWNER\" | ascii_downcase))"
 ```
 
 **하나라도 나오면 FAIL이다.** 상태별로 이유가 다르다.

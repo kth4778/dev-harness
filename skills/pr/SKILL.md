@@ -235,18 +235,35 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > # 큐가 끝날 때까지 기다리되 **무한정 기다리지 않는다.** 필수 체크가 끝내
 > # 통과 못 하거나 큐에서 빠지면 MERGED 가 영영 안 되고, 그러면 이 스킬이
 > # 통째로 멈춘다. gh pr merge 는 체크가 아직이면 auto-merge 를 켜 둘 뿐이다.
-> for _ in $(seq 60); do                       # 20초 × 60 = 20분
->   ST=$(gh pr view <N> --json state -q .state)
+> # 요청 하나에도 시한을 건다. 반복 횟수만 세면 **응답이 안 오는 한 번**에
+> # 영영 붙잡힌다 — gh 에는 요청 타임아웃 옵션이 없고 macOS 에는 timeout(1) 이
+> # 없다. 백그라운드로 띄우고 직접 재서 죽인다.
+> pr_state() {
+>   local out pid n=0
+>   out=$(mktemp)
+>   gh pr view "$1" --json state -q .state > "$out" 2>/dev/null &
+>   pid=$!
+>   while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 1; n=$((n+1)); done
+>   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+>   cat "$out"; rm -f "$out"
+> }
+>
+> DEADLINE=$(( $(date +%s) + 1200 ))          # 20분
+> ST=
+> while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+>   ST=$(pr_state <N>)
 >   [ "$ST" = "MERGED" ] && break
 >   [ "$ST" = "CLOSED" ] && { echo "닫혔다 — 정리하지 않는다"; break; }
 >   sleep 20
 > done
-> [ "$ST" = "MERGED" ] || { echo "머지가 안 끝났다($ST). 큐와 체크를 확인하고 정리는 나중에"; }
 >
 > if [ "$ST" = "MERGED" ]; then
 >   git switch "$BASE"                         # 지울 브랜치에서 먼저 나온다
->   git push "$REMOTE" --delete "$BR"          # 위에서 정한 그 원격
->   git branch -D "$BR"                        # 로컬
+>   # 원격 삭제가 실패하면 로컬도 남긴다. 로컬만 지우면 **정작 지우려던 원격
+>   # 브랜치는 남고 증거만 사라진다.**
+>   git push "$REMOTE" --delete "$BR" && git branch -D "$BR"
+> else
+>   echo "머지가 안 끝났다($ST). 큐와 체크를 확인하고 정리는 나중에"
 > fi
 > ```
 >
@@ -282,7 +299,9 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
 [ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git switch "$BASE" && git pull
-git fetch --prune                    # 원격에서 지워진 브랜치의 추적 ref 정리
+git fetch --prune "$REMOTE"          # 브랜치를 올린 그 원격을 정리한다.
+                                     # 인자 없이 부르면 통합 브랜치의 원격만
+                                     # 훑어 fork 쪽 낡은 ref 가 그대로 남는다
 ```
 
 **`git branch -d`를 따로 부르지 않는다.** `--delete-branch`가 로컬까지 지웠으므로
