@@ -27,9 +27,12 @@ printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C
 # 원격 이름도 origin 으로 박지 않는다. fork 에서는 통합 브랜치가 upstream 에
 # 있고 origin/main 은 낡아 있다 — 그대로 재면 **upstream 의 남의 커밋이 내
 # 기능 커밋으로 세어지고**, 아래 모든 `$BASE..HEAD` 판정이 그 범위로 돈다.
-BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" || echo origin)
-git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
-  || BASE_REMOTE=$(git remote | grep -x upstream || echo origin)
+# upstream 이 있으면 **그쪽을 먼저** 본다. fork 에서 origin/main 은 대개 낡아
+# 있는데, 있다는 이유로 그것을 고르면 낡은 조상 기준으로 범위가 잡혀
+# upstream 의 남의 커밋이 내 기능 커밋으로 세어진다.
+BASE_REMOTE=$(git remote | grep -x upstream \
+  || git config "branch.$BASE_BRANCH.remote" || echo origin)
+git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null || BASE_REMOTE=origin
 BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH")
 ```
 

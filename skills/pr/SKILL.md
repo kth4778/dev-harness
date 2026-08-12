@@ -152,7 +152,8 @@ claudecode 워크플로는 `synchronize`를 트리거에서 빼 뒀다
 리뷰가 안 왔으면 **머지하지 말고 워크플로부터 고친다.**
 `show_full_output` 류의 진단이 필요할 수 있고, **워크플로를 고치는 PR은
 자기 자신을 검증하지 못한다**(액션이 기본 브랜치와 내용이 다르면 실행을 거부한다).
-머지한 뒤 다른 PR에 push해서 확인한다.
+머지한 뒤 **새 PR을 열어** 확인한다 — 이 워크플로는 `synchronize`를 안 받으므로
+push로는 안 돈다. draft를 ready로 바꾸거나 닫힌 PR을 reopen해도 트리거된다.
 
 → [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙
 (**브랜치 동결과 스택 PR**·심각도 판정·수용 판단·답글 금지·머지 뒤 지적)
@@ -230,7 +231,11 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > 빼고 올린 뒤, **큐가 머지를 끝낸 다음** 따로 지운다.
 >
 > ```bash
-> gh pr merge <N> --merge                      # 큐에 넣는다
+> # 큐에 넣는 요청도 멈출 수 있다. 아래 pr_state 와 같은 방식으로 감싼다.
+> bounded() { local pid n=0; "$@" & pid=$!
+>   while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 1; n=$((n+1)); done
+>   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
+> bounded gh pr merge <N> --merge              # 큐에 넣는다
 >
 > # 큐가 끝날 때까지 기다리되 **무한정 기다리지 않는다.** 필수 체크가 끝내
 > # 통과 못 하거나 큐에서 빠지면 MERGED 가 영영 안 되고, 그러면 이 스킬이
@@ -258,10 +263,16 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > done
 >
 > if [ "$ST" = "MERGED" ]; then
->   git switch "$BASE"                         # 지울 브랜치에서 먼저 나온다
->   # 원격 삭제가 실패하면 로컬도 남긴다. 로컬만 지우면 **정작 지우려던 원격
->   # 브랜치는 남고 증거만 사라진다.**
->   git push "$REMOTE" --delete "$BR" && git branch -D "$BR"
+>   # switch 가 실패하면(워킹트리 변경 등) 멈춘다. 그대로 가면 브랜치에 남은
+>   # 채로 삭제를 시도해 로컬이 안 지워진다.
+>   if git switch "$BASE"; then
+>     # 원격에 이미 없으면 성공으로 친다 — 머지 후 head 를 자동 삭제하는 설정이
+>     # 흔하고, 그때 --delete 는 실패로 끝난다. 그 실패를 그대로 받으면 로컬
+>     # 브랜치가 남아 재사용 대상이 된다.
+>     if git ls-remote --exit-code --heads "$REMOTE" "$BR" >/dev/null 2>&1; then
+>       git push "$REMOTE" --delete "$BR" || { echo "원격 삭제 실패 — 로컬도 남긴다"; false; }
+>     fi && git branch -D "$BR"
+>   fi
 > else
 >   echo "머지가 안 끝났다($ST). 큐와 체크를 확인하고 정리는 나중에"
 > fi
@@ -294,10 +305,14 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 머지 후 로컬 정리:
 
 ```bash
-# Phase 5 가 검사한 값을 그대로 쓴다. origin/HEAD 는 기본값일 뿐이고,
-# 프로젝트 CLAUDE.md 가 develop·release 를 통합 브랜치로 정했으면 다르다.
+# 이 블록은 리뷰 뒤 **새 셸**에서 돈다. 앞 블록의 변수는 남아 있지 않으므로
+# 여기서 다시 구한다 — 빌려 쓰면 빈 문자열이 되어 명령이 통째로 실패한다.
+BR=$(git rev-parse --abbrev-ref HEAD)
+REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
+  || git config "branch.$BR.remote" || echo origin)
 BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
 [ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+
 git switch "$BASE" && git pull
 git fetch --prune "$REMOTE"          # 브랜치를 올린 그 원격을 정리한다.
                                      # 인자 없이 부르면 통합 브랜치의 원격만
