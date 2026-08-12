@@ -167,8 +167,12 @@ PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
 # origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
 # `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.
+# 다른 gh 호출과 마찬가지로 실패를 확인한다. 여기만 안 보면 조회 실패가
+# 「base 저장소를 모른다」로 보여 아래에서 로컬 설정으로 떨어진다
+# (claude, PR #55).
 BASE_NWO=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR" \
-    -q '.base.repo.full_name' 2>/dev/null)
+    -q '.base.repo.full_name' 2>/dev/null) \
+    || die "PR #$PR 의 base 저장소를 못 읽었다(네트워크·인증). 정리하지 않는다"
 # 부분문자열로 찾으면 `me/work` 가 `me/work-backup` 원격에 들어맞아 **엉뚱한
 # 저장소에서 통합 브랜치를 당긴다.** head 쪽과 같은 정규화로 정확히 비교한다.
 BASE_REMOTE=
@@ -195,12 +199,19 @@ fi
 # 두 번 시도하면 **Phase 6 이 통째로 막힌다.** 기본은 --merge 다(규칙 2 —
 # 커밋 단위를 남긴다). 없으면 squash·rebase 로 떨어진다. 그때는 이력이 접히므로
 # 진행 기록이 해시가 아니라 제목을 가리켜야 한다(build 스킬).
+# 허용 전략은 **저장소** 설정이다 — `gh pr view` 에는 없는 필드다.
+# 한 번에 셋을 읽는다(claude, PR #55).
 STRAT=--merge
-if [ "$(gh_json mergeCommitAllowed .mergeCommitAllowed 2>/dev/null)" = "false" ]; then
-    if [ "$(gh_json squashMergeAllowed .squashMergeAllowed 2>/dev/null)" = "true" ]; then
-        STRAT=--squash
-    elif [ "$(gh_json rebaseMergeAllowed .rebaseMergeAllowed 2>/dev/null)" = "true" ]; then
-        STRAT=--rebase
+ALLOW=$(mktemp)
+bounded 30 gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
+    -q '"\(.mergeCommitAllowed) \(.squashMergeAllowed) \(.rebaseMergeAllowed)"' \
+    > "$ALLOW" 2>/dev/null
+read -r M_OK S_OK R_OK < "$ALLOW" || { M_OK=true; S_OK=true; R_OK=true; }
+rm "$ALLOW" 2>/dev/null
+if [ "$M_OK" = "false" ]; then
+    if   [ "$S_OK" = "true" ]; then STRAT=--squash
+    elif [ "$R_OK" = "true" ]; then STRAT=--rebase
+    else die "이 저장소는 merge·squash·rebase 를 다 껐다. 설정을 확인한다"
     fi
     printf '  merge commit 이 꺼져 있다 — %s 로 머지한다\n' "$STRAT" >&2
 fi

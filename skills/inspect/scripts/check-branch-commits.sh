@@ -61,6 +61,9 @@ else
 fi
 
 # 이 브랜치로 PR 이 열렸던 적이 있나. fork 면 parent 를 짚는다.
+# **소유자를 못 구했으면 여기서 정말로 건너뛴다.** 위에서 「건너뛴다」고 찍고
+# 그대로 내려와 빈 소유자로 대조하면, 아무 PR 도 안 걸려 검사가 조용히
+# 무력해진다 (claude, PR #55).
 # gh 에는 요청 타임아웃 옵션이 없다. 응답이 안 오면 Phase 5 가 통째로 멈추므로
 # 직접 잰다 — merge-cleanup.sh 의 bounded 와 같은 이유다.
 bounded() {
@@ -87,9 +90,10 @@ gh_out() {
     return "$rc"
 }
 
-UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
+UPSTREAM=
+[ -n "$HEAD_OWNER" ] && UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
   -q '.parent.nameWithOwner // .nameWithOwner')
-if [ -n "$UPSTREAM" ]; then
+if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
     # jq 안에서 빈 값을 그대로 펼치면 구문 오류가 나고, 그 실패를 삼키면
     # PRIOR 이 조용히 비어 **재사용 검사가 통째로 무력해진다**(claude, PR #53).
@@ -164,7 +168,9 @@ SPLIT=$(mktemp)
 DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)'
 # 파일 안에 테스트가 함께 있는 관례 — Rust `#[cfg(test)]`, Go `func Test`,
 # Java `@Test`, pytest `def test_`, JS `describe(`/`it(`.
-INLINE_TEST='#\[cfg\(test\)\]|func Test[A-Z]|@Test|def test_|(describe|it)\('
+# `it\(` 에 경계가 없으면 `exit(`·`commit(`·`submit(` 에 걸려 **구현만 있는
+# 커밋이 통과한다** (claude, PR #55). 줄 시작이나 비단어 뒤로 못박는다.
+INLINE_TEST='#\[cfg\(test\)\]|func Test[A-Z]|@Test|def test_|(^|[^A-Za-z0-9_.])(describe|it|test)\('
 
 while read -r sha subject; do
     # 커밋이 0개면 heredoc 에 개행 하나가 남아 이 루프가 **한 번 돈다.**
@@ -186,8 +192,11 @@ while read -r sha subject; do
 
     # 경로로 못 가리는 관례가 있다 — 구현 파일 안에 테스트를 같이 두는 언어.
     # 추가된 줄에 테스트 표식이 있으면 함께 있는 것으로 본다.
-    if [ "$has_test" = 0 ] && git show --format= -U0 "$sha" \
-         | grep '^+' | grep -qE "$INLINE_TEST"; then
+    # `grep -q` 를 쓰면 안 된다. 매치하자마자 닫혀 앞의 grep 이 SIGPIPE 로 죽고
+    # `set -o pipefail` 이 그것을 파이프라인 실패로 읽어 **이 예외가 통째로
+    # 안 걸린다.** 이 세션에서 같은 실수를 여섯 번째 한다.
+    if [ "$has_test" = 0 ] \
+       && git show --format= -U0 "$sha" | grep '^+' | grep -E "$INLINE_TEST" >/dev/null 2>&1; then
         continue
     fi
 

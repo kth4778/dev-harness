@@ -14,6 +14,9 @@ r() { if [ "$1" = "$2" ]; then pass=$((pass+1)); printf '  [OK ] '; else fail=$(
      printf '기대 %s / 실제 %s  %s\n' "$1" "$2" "$3"; }
 
 # gh 는 없는 것으로 둔다(재사용 검사는 건너뛴다). 필요할 때만 가짜를 놓는다.
+# 가짜 gh 를 함수로 둔다. 한 갈래가 이것을 망가진 판으로 덮으면 **뒤 갈래가
+# 그대로 물려받아** 엉뚱한 곳에서 실패한다 — 실제로 그렇게 됐다.
+put_gh() {
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
 case "$*" in
@@ -22,7 +25,9 @@ case "$*" in
   *"pr list"*)               printf '%s\n' "${GH_PRIOR:-}" ;;
 esac
 GH
-chmod +x "$BIN/gh"; export PATH="$BIN:$PATH"
+chmod +x "$BIN/gh"
+}
+put_gh; export PATH="$BIN:$PATH"
 
 fresh() {
     rm -rf "$R"; mkdir -p "$R/remote" "$R/work"
@@ -159,6 +164,23 @@ esac
 GHF
 chmod +x "$BIN/gh"
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'PR 이력 조회 실패를 통과로 두지 않는다'
+put_gh                                   # 뒤 갈래가 이 망가진 판을 물려받지 않게 원복한다
+
+echo "── claude 지적 (PR #55) ──"
+# `it(` 에 경계가 없으면 exit(·commit( 에 걸려 구현만 있는 커밋이 통과한다.
+fresh; git switch -qc feature/exitcall
+printf 'function f(){ exit(1); commit(x); }\n' > app.js; git add .; git commit -qm "feat: 구현만"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'exit(·commit( 을 테스트로 안 본다'
+
+fresh; git switch -qc feature/jstest
+printf 'function f(){}\nit("works", () => {});\n' > app.js; git add .; git commit -qm "feat: JS 인라인 테스트"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" 'it( 는 테스트로 본다'
+
+# 원격이 없으면 재사용 검사를 **정말로** 건너뛴다(빈 소유자로 대조하지 않는다).
+fresh; git remote remove origin 2>/dev/null; git switch -qc feature/noremote
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' bash "$SCRIPT" main >/dev/null 2>&1; echo $?)" \
+    '원격이 없으면 재사용 검사를 건너뛴다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

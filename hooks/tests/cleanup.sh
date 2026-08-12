@@ -58,6 +58,12 @@ case "$1" in
       *) printf '%s\n' "${GH_BASE_NWO:-}" ; exit 0 ;;   # base repo full_name
     esac ;;
 esac
+# 허용 전략은 저장소 설정이다 — repo view 로 온다.
+case "$*" in
+  *"repo view"*)
+    printf '%s %s %s\n' "${GH_MERGE_OK:-true}" "${GH_SQUASH_OK:-true}" "${GH_REBASE_OK:-true}"
+    exit 0 ;;
+esac
 case "$2" in
   view)
     case "$*" in
@@ -66,9 +72,6 @@ case "$2" in
       *headRefOid*)           printf '%s\n' "${GH_OID}" ;;
       *headRepositoryOwner*)  printf '%s\n' "${GH_OWNER:-me}" ;;
       *headRepository*)       printf '%s\n' "${GH_REPO:-work}" ;;
-      *mergeCommitAllowed*)   printf '%s\n' "${GH_MERGE_OK:-true}" ;;
-      *squashMergeAllowed*)   printf '%s\n' "${GH_SQUASH_OK:-true}" ;;
-      *rebaseMergeAllowed*)   printf '%s\n' "${GH_REBASE_OK:-true}" ;;
       *state*)                printf '%s\n' "${GH_STATE:-MERGED}" ;;
     esac
     exit "${GH_VIEW_RC:-0}" ;;
