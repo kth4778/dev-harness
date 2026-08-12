@@ -1,130 +1,31 @@
 ## 10개 판정
 
-### 1. 브랜치 전략
+### 1·2. 브랜치 전략과 커밋 단위 — 스크립트가 판정한다
 
 ```bash
-git rev-parse --abbrev-ref HEAD
-```
-feature 브랜치인가. 베이스가 프로젝트 CLAUDE.md가 정한 대상인가.
-
-**head와 base 이름이 둘 다 ASCII인가.**
-
-```bash
-# BASE 를 덮어쓰지 마라 — SKILL.md 가 merge-base SHA 로 쓰고, 아래 판정들이
-# `$BASE..HEAD` 로 그것을 참조한다. 브랜치 이름으로 바꾸면 공통 조상이 아니라
-# 두 tip 을 비교하게 되어 upstream 변경이 검사 대상에 섞인다.
-#
-# BASE_BRANCH 는 **PR 의 base 로 쓸 값**이다. origin/HEAD 를 그냥 믿지 마라 —
-# 프로젝트 CLAUDE.md 가 develop 이나 release 를 통합 브랜치로 정했으면
-# origin/HEAD(main)와 다르고, 검사가 엉뚱한 이름을 본다. 정한 값을 적는다.
-BASE_BRANCH=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치를 적는다(예: develop)
-[ -n "$BASE_BRANCH" ] || BASE_BRANCH=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-printf '%s\n%s\n' "$(git rev-parse --abbrev-ref HEAD)" "$BASE_BRANCH" | LC_ALL=C grep -n '[^ -~]'
-
-# SKILL.md 의 BASE 도 이 값에서 유도한다. origin/HEAD 로 잡으면 develop 을 쓰는
-# 저장소에서 엉뚱한 조상을 기준으로 아래 판정들이 돈다.
-#
-# 원격 이름도 origin 으로 박지 않는다. fork 에서는 통합 브랜치가 upstream 에
-# 있고 origin/main 은 낡아 있다 — 그대로 재면 **upstream 의 남의 커밋이 내
-# 기능 커밋으로 세어지고**, 아래 모든 `$BASE..HEAD` 판정이 그 범위로 돈다.
-# upstream 이 있으면 **그쪽을 먼저** 본다. fork 에서 origin/main 은 대개 낡아
-# 있는데, 있다는 이유로 그것을 고르면 낡은 조상 기준으로 범위가 잡혀
-# upstream 의 남의 커밋이 내 기능 커밋으로 세어진다.
-BASE_REMOTE=$(git remote | grep -x upstream \
-  || git config "branch.$BASE_BRANCH.remote" || echo origin)
-# ref 가 없으면 **가져온다.** origin 으로 조용히 떨어지면 안 된다 — 그 낡은
-# 것이 바로 위에서 말한 문제의 원인이다. 못 가져오면 멈추고 사람에게 알린다.
-git rev-parse --verify -q "$BASE_REMOTE/$BASE_BRANCH" >/dev/null \
-  || git fetch --no-tags "$BASE_REMOTE" "$BASE_BRANCH" \
-  || { echo "FAIL: $BASE_REMOTE/$BASE_BRANCH 를 못 찾았다. fetch 하거나 통합 브랜치를 확인한다"; }
-BASE=$(git merge-base HEAD "$BASE_REMOTE/$BASE_BRANCH")
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" [통합브랜치]
 ```
 
-**뭐라도 나오면 FAIL이다.** `anthropics/claude-code-action`이 **base** 이름을
-검증하고 비ASCII를 거부한다 — 잡이 27초 만에 죽는다. base일 때만 터지므로
-head만 보면 안 보인다. 이 저장소의 리뷰 워크플로가 그 액션을 쓴다.
+**손으로 치지 않는다.** 코드 블록으로 두었더니 **블록마다 새 셸이라 `BASE`가
+없었고**, `..HEAD`가 `HEAD..HEAD`로 읽혀 **커밋을 하나도 못 세고 조용히
+통과했다.** `pr` 스킬에서 이미 같은 병을 겪어 스크립트로 뺐다.
+`hooks/tests/inspect-checks.sh`가 11갈래를 잰다.
 
-**이 브랜치로 PR이 이미 열렸던 적이 있는가.**
+스크립트가 보는 것:
 
-```bash
-BR=$(git rev-parse --abbrev-ref HEAD)
-# head 저장소 owner 는 **이 브랜치가 push 되는 remote** 에서 유도한다.
-# `gh repo view` 는 gh 가 향하는 저장소(fork 라면 upstream)를 주므로 head 와 다르다.
-# push 대상은 pushRemote > pushDefault > remote 순으로 정해진다.
-# 마지막 것만 보면 fork 로 push 하는 설정에서 소유자를 잘못 짚는다.
-HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
-  || git config remote.pushDefault \
-  || git config "branch.$BR.remote" \
-  || echo origin)
-# git@host:owner/repo · https://host/owner/repo · ssh://git@host:22/owner/repo 를 다 받는다
-HEAD_OWNER=$(git remote get-url --push "$HEAD_REMOTE" \
-  | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
-# fork 면 **parent**를 짚는다. `gh repo view` 는 현재 저장소를 주므로 fork 에서
-# 그대로 쓰면 upstream 의 옛 PR 을 못 본다.
-UPSTREAM=$(gh repo view --json parent,nameWithOwner \
-  -q '.parent.nameWithOwner // .nameWithOwner')
-
-# --limit 은 **거르기 전에** 자른다. 흔한 이름(fix/tests)이 upstream 에 많으면
-# 내 옛 PR 이 잘려 나가 검사가 헛통과한다. 넉넉히 받아 두고 뒤에서 거른다.
-# 소유자 비교는 대소문자를 무시한다 — GitHub 로그인은 안 가리는데 문자열은 가린다.
-gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
-  --json number,title,state,headRepositoryOwner \
-  -q ".[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase) == (\"$HEAD_OWNER\" | ascii_downcase))"
-```
-
-**하나라도 나오면 FAIL이다.** 상태별로 이유가 다르다.
-
-| 상태 | 왜 FAIL인가 |
+| | |
 |---|---|
-| `MERGED` | 다시 쓰면 스택 PR이 되어 claude 리뷰가 아예 안 돈다 |
-| `CLOSED` | 봇 지적을 받고 새 브랜치로 갈아탄 자리다. 되돌아가면 그 라운드가 다시 열린다 |
-| `OPEN` | 같은 브랜치에 또 push하면 **둘 다 새로 안 돈다** — codex는 push를 트리거로 안 쓰고, claude 워크플로에는 `synchronize`가 없다. **두 리뷰가 옛 커밋에 머물고 고친 코드는 아무도 안 본다**(브랜치 동결) |
+| 보호 브랜치 | `main`·`master`·`develop`에서 작업 중이면 FAIL |
+| 이름 | head와 base가 ASCII인가 — base의 비ASCII는 claude 리뷰 잡을 죽인다 |
+| 재사용 | 이 브랜치로 PR이 열렸던 적이 있나(머지·닫힘·열림 전부). fork면 parent를 짚고 소유자를 대소문자 무시로 대조한다 |
+| 커밋 수 | `merge-base`를 **upstream 우선**으로 구해 센다 — fork의 낡은 `origin/<base>`로 재면 남의 커밋이 내 것으로 세어진다 |
+| 갈라진 커밋 | 구현만·테스트만 있는 커밋을 짚는다. `refactor:`·`docs:`·`chore:`는 예외(규칙 2) |
+| 반복 수정 | 같은 파일을 세 번 이상 건드린 것을 센다 — 한 자리를 여러 번 고쳤다는 신호 |
 
-`merged`만 보면 **닫힌 쪽을 통째로 놓친다.** 리뷰 한 라운드마다 닫힌 브랜치가
-하나씩 쌓이므로 이쪽이 오히려 흔하다.
+**하위 기능 수를 세어 커밋 수와 비교하는 것은 사람이 한다.** 스크립트는 숫자와
+신호만 낸다. 많으면 그 자리에서 접는다(규칙 2) — PR을 올린 뒤에는 못 접는다.
 
-`headRepositoryOwner`로 거르는 이유: `--head`는 이름만 보고 저장소를 못 가린다
-(`<owner>:<branch>` 미지원). fork를 받는 저장소에서는 **남이 같은 이름으로 열었던
-PR이 내 브랜치를 FAIL로 만든다.** 반대로 내가 fork에서 작업하는 경우
-`gh repo view`가 upstream을 가리켜 **내 옛 PR을 못 찾는다** — 그래서 owner를
-브랜치의 push 대상 remote에서 유도한다.
-
-통합 브랜치에서 새 브랜치를 파고 옮긴다.
-
-> 머지할 때 `--delete-branch`를 쓰면 이 상황 자체가 안 생긴다. 이 검사는
-> 그것이 실패했거나 옛 브랜치가 살아남은 경우를 받는 자리다. 훅으로 막던
-> 것을 걷어냈으므로(README 「넣었다가 뺀 것」) 여기가 유일한 강제 지점이다.
-
-### 2. 커밋 단위
-
-```bash
-git log --oneline "$BASE"..HEAD
-```
-
-**하위 기능 수를 세고 커밋 수와 비교한다.** 남을 단위는 하위 기능 하나당
-커밋 하나다 — 구현과 테스트가 **같은 커밋**에 들어간다(규칙 2).
-
-| 신호 | 무엇을 뜻하나 |
-|---|---|
-| 커밋 수가 하위 기능 수보다 **많다** | 리뷰 왕복이 접히지 않았다 |
-| 구현만 있는 커밋 · 테스트만 있는 커밋 | 갈라진 것이다 → 하나로 합친다. 아래 TDD 검사와 같은 판정이다. **리팩터·문서 커밋은 예외** — 검증할 새 동작이 없다(규칙 2) |
-| 같은 파일·같은 함수를 **세 번 이상** 건드린 커밋들 | 한 자리를 여러 번 고쳤다 → 최종 형태로 접는다 |
-| `chore: …켠다` ↔ `…끈다` 처럼 **상쇄하는 쌍** | 둘 다 아무것도 안 한 것이다 → 접는다 |
-| `test: …통과하던 것을 막는다` | 헛통과를 뒤늦게 막은 것 → 원래 `test:` 커밋에 흡수 |
-
-```bash
-# 같은 파일을 몇 번씩 건드렸나
-git log --format=%H "$BASE"..HEAD | while read -r c; do git show --name-only --format= "$c"; done \
-  | sort | uniq -c | sort -rn | head
-```
-
-**접는 것은 Phase 6이 아니라 여기서 판정한다.** 이미 push한 뒤에는 못 접으므로
-(force push가 봇 리뷰를 떠 버린다) 첫 push 전인 이 자리가 마지막 기회다.
-
-2026-08-11 실측: PokeClip PR #34에 커밋 51개가 들어갔고 하위 기능은 12개였다.
-**차이 39개가 리뷰 왕복이다.** 이 검사가 없어서 그대로 머지됐다.
-
-**접은 뒤 테스트를 다시 돌린다** — 접힌 조합으로는 한 번도 안 돌아봤다.
+### 2. 테스트 판정
 
 **테스트 판정은 1회 실행으로 쓰지 않는다. 최소 5회다.**
 

@@ -18,7 +18,12 @@ bounded() {
     "$@" & pid=$!
     while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$secs" ]; do sleep 1; n=$((n+1)); done
     if kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        # TERM 을 무시하는 프로세스가 있다. 유예를 준 뒤 KILL 로 올린다 —
+        # 안 그러면 뒤의 wait 가 시한 없이 붙잡혀 이 함수가 무의미해진다.
+        kill -TERM "$pid" 2>/dev/null
+        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 5 ]; do sleep 1; n=$((n+1)); done
+        kill -KILL "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
         return 124                       # 시한 초과
     fi
     wait "$pid"
@@ -47,9 +52,27 @@ PR_HEAD=$(gh_json headRefName .headRefName) || die "PR #$PR 을 못 읽었다"
 # 엉뚱한 브랜치로 옮겨 놓고 정리했다고 보고한다.
 BASE=$(gh_json baseRefName .baseRefName) || die "PR #$PR 의 base 를 못 읽었다"
 
-# 리뷰가 붙은 커밋. 머지 직전에 다시 재서 그 사이 누가 push 했으면 멈춘다 —
-# 이 저장소 워크플로에는 synchronize 가 없어 **새 커밋은 리뷰를 못 받는다.**
-REVIEWED=$(gh_json headRefOid .headRefOid) || die "PR #$PR 의 head 커밋을 못 읽었다"
+# PR 의 현재 head 와 **로컬 HEAD 가 같은지** 본다. 이름만 같고 실체가 다른
+# 경우가 있다 — 다른 fork 의 동명 브랜치, 또는 아직 push 안 한 커밋.
+# 그대로 가면 `git branch -D` 가 **push 안 된 커밋을 날린다.**
+PR_OID=$(gh_json headRefOid .headRefOid) || die "PR #$PR 의 head 커밋을 못 읽었다"
+LOCAL_OID=$(git rev-parse HEAD)
+[ "$PR_OID" = "$LOCAL_OID" ] \
+    || die "PR #$PR 의 head 는 ${PR_OID:0:8} 인데 로컬 HEAD 는 ${LOCAL_OID:0:8} 다.
+       push 안 한 커밋이 있거나 다른 저장소의 동명 브랜치다"
+
+# **리뷰가 실제로 붙은 커밋**을 얻는다. 현재 head 를 그대로 쓰면
+# `--match-head-commit` 이 무의미하다 — 리뷰 뒤에 push 됐다면 그 새 커밋이
+# 이미 head 이기 때문이다. 이 워크플로에는 synchronize 가 없어 **그 커밋은
+# 리뷰를 못 받는다.**
+REVIEWED=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
+    -q '[.[] | .commit_id] | last // empty' 2>/dev/null)
+if [ -z "$REVIEWED" ]; then
+    die "리뷰가 없다. 봇 2개 리뷰를 받은 뒤 머지한다(규칙 7)"
+fi
+[ "$REVIEWED" = "$PR_OID" ] \
+    || die "리뷰는 ${REVIEWED:0:8} 에 붙었는데 head 는 ${PR_OID:0:8} 다.
+       리뷰 뒤에 push 됐다 — 그 커밋은 아무도 안 봤다. 새 브랜치로 다시 올린다"
 
 # head 를 올린 원격. base 와 다를 수 있다(fork). 머지 **전에** 잡아둔다 —
 # `--delete-branch` 가 로컬 브랜치를 지우고 나면 못 구한다.
@@ -57,7 +80,13 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" \
   || echo origin)
-BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
+# base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
+# origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
+BASE_REPO=$(gh_json baseRepository .baseRepository.name 2>/dev/null)
+BASE_OWNER=$(gh_json baseRepository .baseRepository.owner.login 2>/dev/null)
+BASE_REMOTE=$(git remote -v | awk -v o="$BASE_OWNER" -v r="$BASE_REPO" \
+    '$0 ~ o"/"r && /\(fetch\)/ {print $1; exit}')
+[ -n "$BASE_REMOTE" ] || BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
 
 # ── 머지 ────────────────────────────────────────────────────────
 # --match-head-commit 이 리뷰된 커밋과 다르면 거부한다.

@@ -18,13 +18,19 @@ r() { if [ "$1" = "$2" ]; then pass=$((pass+1)); printf '  [OK ] '; else fail=$(
 # 가짜 gh. 환경변수로 행동을 바꾼다.
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
+# 리뷰 목록 조회
+case "$1" in
+  api) [ -n "${GH_NO_REVIEW:-}" ] && exit 0
+       printf '%s\n' "${GH_REVIEWED:-$GH_OID}"; exit 0 ;;
+esac
 case "$2" in
   view)
     case "$*" in
-      *headRefName*) printf '%s\n' "${GH_HEAD:-feature/x}" ;;
-      *baseRefName*) printf '%s\n' "${GH_BASE:-main}" ;;
-      *headRefOid*)  printf '%s\n' "${GH_OID:-abc1234567890}" ;;
-      *state*)       printf '%s\n' "${GH_STATE:-MERGED}" ;;
+      *headRefName*)    printf '%s\n' "${GH_HEAD:-feature/x}" ;;
+      *baseRefName*)    printf '%s\n' "${GH_BASE:-main}" ;;
+      *headRefOid*)     printf '%s\n' "${GH_OID}" ;;
+      *baseRepository*) printf '%s\n' "" ;;
+      *state*)          printf '%s\n' "${GH_STATE:-MERGED}" ;;
     esac
     exit "${GH_VIEW_RC:-0}" ;;
   merge)
@@ -46,7 +52,9 @@ fresh() {
     printf 'x\n' > f.txt; git add f.txt; git commit -qm work
     git push -q -u origin feature/x 2>/dev/null
 }
-run() { CLEANUP_WAIT_SEC=2 CLEANUP_POLL_SEC=1 bash "$SCRIPT" 1 2>&1; }
+# PR head SHA 는 로컬 HEAD 와 같아야 통과한다. 시험이 그 값을 맞춰 준다.
+run() { CLEANUP_WAIT_SEC=2 CLEANUP_POLL_SEC=1 GH_OID="${GH_OID:-$(git rev-parse HEAD)}" \
+    bash "$SCRIPT" 1 2>&1; }
 
 echo "── 정상 경로 ──"
 fresh; out=$(run); rc=$?
@@ -94,6 +102,18 @@ fresh; git push -q origin --delete feature/x 2>/dev/null
 out=$(run); rc=$?
 r 0 "$rc" '이미 없으면 성공으로 친다'
 r "" "$(git branch --list feature/x)" '로컬은 그래도 지운다'
+
+echo "── 로컬 HEAD 와 PR head 를 대조한다 ──"
+fresh; out=$(GH_OID=deadbeefdeadbeefdeadbeef run); rc=$?
+r 1 "$rc" 'SHA 가 다르면 멈춘다(push 안 한 커밋·동명 브랜치)'
+r "feature/x" "$(git branch --show-current)" 'push 안 한 커밋을 날리지 않는다'
+
+echo "── 리뷰가 붙은 커밋에 고정한다 ──"
+fresh; out=$(GH_REVIEWED=0123456789abcdef0123 run); rc=$?
+r 1 "$rc" '리뷰가 다른 커밋에 붙어 있으면 멈춘다(리뷰 뒤 push)'
+printf '%s' "$out" | grep -q "아무도 안 봤다" && r y y '그 커밋이 리뷰를 못 받았다고 알린다' || r y n '그 커밋이 리뷰를 못 받았다고 알린다'
+fresh; out=$(GH_NO_REVIEW=1 run); rc=$?
+r 1 "$rc" '리뷰가 아예 없으면 멈춘다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

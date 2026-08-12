@@ -221,7 +221,7 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                시험 147개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 163개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
@@ -229,5 +229,6 @@ skills/
   build/ tdd-java/                Phase 4
   inspect/ pr/ retro/ wrap/       Phase 5~8 (pr references: 봇 리뷰 대응, 위키 반영)
     pr/scripts/merge-cleanup.sh   머지 + 브랜치 정리 — 문서가 아니라 스크립트다
+    inspect/scripts/…             브랜치·커밋 판정 — 같은 이유로 스크립트다
 templates/                        CLAUDE.md 2층·3층 골격
 ```
