@@ -42,7 +42,15 @@ description: 전수 검사가 전부 PASS한 뒤 PR을 올리고 봇 리뷰에 �
 # 프로젝트 CLAUDE.md 가 develop·release 를 통합 브랜치로 정했으면 다르다.
 BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
 [ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-git push -u origin feature/{이름}
+
+# push 대상을 **여기서 한 번 정하고** 생성·정리가 같은 것을 쓴다.
+# 생성은 origin 에 박고 정리는 pushDefault 를 따르면 서로 다른 저장소를 가리켜,
+# 정작 PR 의 head 브랜치가 안 지워진다.
+BR=$(git rev-parse --abbrev-ref HEAD)
+REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
+  || git config "branch.$BR.remote" || echo origin)
+
+git push -u "$REMOTE" "$BR"
 gh pr create --base "$BASE" --title "{타입}: {한 줄}" --body-file _workspace/pr-body.md
 ```
 
@@ -222,19 +230,24 @@ gh pr merge <N> --merge --delete-branch      # 스쿼시(--squash) 아님
 > 빼고 올린 뒤, **큐가 머지를 끝낸 다음** 따로 지운다.
 >
 > ```bash
-> BR=$(git rev-parse --abbrev-ref HEAD)
-> REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
->   || git config "branch.$BR.remote" || echo origin)
->
 > gh pr merge <N> --merge                      # 큐에 넣는다
 >
-> # 큐가 끝날 때까지 **실제로 기다린다.** 한 번 조회하고 넘어가면 아직 큐에
-> # 있는 채로 브랜치를 지워 머지가 밀려난다.
-> until [ "$(gh pr view <N> --json state -q .state)" = "MERGED" ]; do sleep 20; done
+> # 큐가 끝날 때까지 기다리되 **무한정 기다리지 않는다.** 필수 체크가 끝내
+> # 통과 못 하거나 큐에서 빠지면 MERGED 가 영영 안 되고, 그러면 이 스킬이
+> # 통째로 멈춘다. gh pr merge 는 체크가 아직이면 auto-merge 를 켜 둘 뿐이다.
+> for _ in $(seq 60); do                       # 20초 × 60 = 20분
+>   ST=$(gh pr view <N> --json state -q .state)
+>   [ "$ST" = "MERGED" ] && break
+>   [ "$ST" = "CLOSED" ] && { echo "닫혔다 — 정리하지 않는다"; break; }
+>   sleep 20
+> done
+> [ "$ST" = "MERGED" ] || { echo "머지가 안 끝났다($ST). 큐와 체크를 확인하고 정리는 나중에"; }
 >
-> git switch "$BASE"                           # 지울 브랜치에서 먼저 나온다
-> git push "$REMOTE" --delete "$BR"            # 원격 — origin 이 아닐 수 있다
-> git branch -D "$BR"                          # 로컬
+> if [ "$ST" = "MERGED" ]; then
+>   git switch "$BASE"                         # 지울 브랜치에서 먼저 나온다
+>   git push "$REMOTE" --delete "$BR"          # 위에서 정한 그 원격
+>   git branch -D "$BR"                        # 로컬
+> fi
 > ```
 >
 > **브랜치를 옮긴 뒤에 지운다.** 체크아웃된 브랜치는 git이 삭제를 거부한다.

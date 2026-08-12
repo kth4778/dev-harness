@@ -45,11 +45,15 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
 # git@host:owner/repo · https://host/owner/repo · ssh://git@host:22/owner/repo 를 다 받는다
 HEAD_OWNER=$(git remote get-url --push "$HEAD_REMOTE" \
   | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
-# --repo 로 **upstream**을 짚는다. fork 에서 gh 가 어디를 향할지는 설정에 달렸고,
-# 옛 PR 은 upstream 에 있다. 소유자 비교는 대소문자를 무시한다 — GitHub 로그인은
-# 대소문자를 구분하지 않는데 문자열 비교는 구분한다.
-UPSTREAM=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 100 \
+# fork 면 **parent**를 짚는다. `gh repo view` 는 현재 저장소를 주므로 fork 에서
+# 그대로 쓰면 upstream 의 옛 PR 을 못 본다.
+UPSTREAM=$(gh repo view --json parent,nameWithOwner \
+  -q '.parent.nameWithOwner // .nameWithOwner')
+
+# --limit 은 **거르기 전에** 자른다. 흔한 이름(fix/tests)이 upstream 에 많으면
+# 내 옛 PR 이 잘려 나가 검사가 헛통과한다. 넉넉히 받아 두고 뒤에서 거른다.
+# 소유자 비교는 대소문자를 무시한다 — GitHub 로그인은 안 가리는데 문자열은 가린다.
+gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
   --json number,title,state,headRepositoryOwner \
   -q ".[] | select((.headRepositoryOwner.login | ascii_downcase) == (\"$HEAD_OWNER\" | ascii_downcase))"
 ```
