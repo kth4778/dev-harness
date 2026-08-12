@@ -78,6 +78,24 @@ fresh; git switch -qc feature/prior
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
 r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' out_of >/dev/null 2>&1; echo $?)" '옛 PR 이 있으면 FAIL'
 
+echo "── codex 지적 (PR #51) ──"
+# 이름에 test 가 든 운영 파일이 테스트로 잡히면 갈라진 커밋이 통과한다.
+fresh; git switch -qc feature/contest
+printf 'x\n' > ContestService.java; git add .; git commit -qm "feat: 구현만"
+o=$(out_of); printf '%s' "$o" | grep -q "갈라진 커밋" && r y y 'ContestService.java 는 테스트가 아니다' || r y n 'ContestService.java 는 테스트가 아니다'
+
+fresh; git switch -qc feature/suffix
+printf 'x\n' > Foo.java; printf 't\n' > FooTest.java; git add .; git commit -qm "feat: 짝"
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y 'Test 접미사는 테스트로 본다' || r n n 'Test 접미사는 테스트로 본다'
+
+fresh; git switch -qc feature/dir
+mkdir -p test; printf 'x\n' > src.py; printf 't\n' > test/s.py; git add .; git commit -qm "feat: 폴더"
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y 'test/ 폴더도 테스트로 본다' || r n n 'test/ 폴더도 테스트로 본다'
+
+echo "── 통합 브랜치 자체를 거부한다 ──"
+fresh; git switch -qc release; printf 'x\n' > f.txt; git add f.txt; git commit -qm work
+r 1 "$(out_of release >/dev/null 2>&1; echo $?)" '인자로 받은 release 에서 작업하면 FAIL'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

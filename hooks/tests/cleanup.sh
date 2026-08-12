@@ -18,19 +18,27 @@ r() { if [ "$1" = "$2" ]; then pass=$((pass+1)); printf '  [OK ] '; else fail=$(
 # 가짜 gh. 환경변수로 행동을 바꾼다.
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
-# 리뷰 목록 조회
 case "$1" in
-  api) [ -n "${GH_NO_REVIEW:-}" ] && exit 0
-       printf '%s\n' "${GH_REVIEWED:-$GH_OID}"; exit 0 ;;
+  api)
+    case "$*" in
+      */reviews*)
+        [ -n "${GH_NO_REVIEW:-}" ] && exit 0
+        # 봇 둘이 각각 어느 커밋을 리뷰했는지. 기본은 현재 head.
+        printf 'chatgpt-codex-connector[bot] %s\n' "${GH_REVIEWED:-$GH_OID}"
+        printf 'claude[bot] %s\n' "${GH_REVIEWED_CLAUDE:-${GH_REVIEWED:-$GH_OID}}"
+        exit 0 ;;
+      *) printf '%s\n' "${GH_BASE_NWO:-}" ; exit 0 ;;   # base repo full_name
+    esac ;;
 esac
 case "$2" in
   view)
     case "$*" in
-      *headRefName*)    printf '%s\n' "${GH_HEAD:-feature/x}" ;;
-      *baseRefName*)    printf '%s\n' "${GH_BASE:-main}" ;;
-      *headRefOid*)     printf '%s\n' "${GH_OID}" ;;
-      *baseRepository*) printf '%s\n' "" ;;
-      *state*)          printf '%s\n' "${GH_STATE:-MERGED}" ;;
+      *headRefName*)          printf '%s\n' "${GH_HEAD:-feature/x}" ;;
+      *baseRefName*)          printf '%s\n' "${GH_BASE:-main}" ;;
+      *headRefOid*)           printf '%s\n' "${GH_OID}" ;;
+      *headRepositoryOwner*)  printf '%s\n' "${GH_OWNER:-me}" ;;
+      *headRepository*)       printf '%s\n' "${GH_REPO:-work}" ;;
+      *state*)                printf '%s\n' "${GH_STATE:-MERGED}" ;;
     esac
     exit "${GH_VIEW_RC:-0}" ;;
   merge)
@@ -42,8 +50,10 @@ chmod +x "$BIN/gh"; export PATH="$BIN:$PATH"
 
 fresh() {
     rm -rf "$R"; mkdir -p "$R/remote" "$R/work"
-    git init -q --bare -b main "$R/remote"
-    git clone -q "$R/remote" "$R/work" 2>/dev/null
+    # 원격 경로가 `me/work` 를 담아야 head 저장소 대조를 통과한다.
+    mkdir -p "$R/me"; git init -q --bare -b main "$R/me/work"
+    ln -sfn "$R/me/work" "$R/remote"
+    git clone -q "$R/me/work" "$R/work" 2>/dev/null
     cd "$R/work" || exit 1
     git config user.email t@t.t; git config user.name t
     printf 'base\n' > base.txt; git add base.txt; git commit -qm init
@@ -114,6 +124,16 @@ r 1 "$rc" '리뷰가 다른 커밋에 붙어 있으면 멈춘다(리뷰 뒤 push
 printf '%s' "$out" | grep -q "아무도 안 봤다" && r y y '그 커밋이 리뷰를 못 받았다고 알린다' || r y n '그 커밋이 리뷰를 못 받았다고 알린다'
 fresh; out=$(GH_NO_REVIEW=1 run); rc=$?
 r 1 "$rc" '리뷰가 아예 없으면 멈춘다'
+
+echo "── 봇 둘이 각각 head 를 리뷰했는지 본다 (PR #51) ──"
+fresh; out=$(GH_REVIEWED_CLAUDE=0123456789abcdef0123 run); rc=$?
+r 1 "$rc" 'claude 가 옛 커밋만 리뷰했으면 멈춘다'
+printf '%s' "$out" | grep -q "claude" && r y y '어느 봇이 빠졌는지 알린다' || r y n '어느 봇이 빠졌는지 알린다'
+
+echo "── head 저장소를 대조한다 ──"
+fresh; out=$(GH_OWNER=other run); rc=$?
+r 1 "$rc" 'PR head 가 다른 저장소면 멈춘다'
+r "feature/x" "$(git branch --show-current)" '내 브랜치를 안 지운다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

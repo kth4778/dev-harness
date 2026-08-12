@@ -183,8 +183,11 @@ FAIL을 내고, 그 자리에서 접는다 — 여기(Phase 6)에 오면 이미 
 PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기회다.
 
 ```bash
-git log --oneline "$BASE"..HEAD          # 세어만 본다
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh"
 ```
+
+**여기서도 스크립트를 부른다.** `git log "$BASE"..HEAD` 를 코드 블록에 두면
+`BASE` 가 없어 `HEAD..HEAD` 로 읽히고 **커밋을 하나도 안 보여준다.**
 
 **여기서 `rebase`를 돌리지 마라.** 이 자리는 PR을 올리고 봇 리뷰를 받은 뒤다 —
 고쳐 쓰면 리뷰가 붙은 SHA가 사라진다. force push해도 워크플로에 `synchronize`가
@@ -229,7 +232,7 @@ git log --oneline "$BASE"..HEAD          # 세어만 본다
 
 **손으로 치지 않는다.** 이 절차를 문서 안 코드 블록으로 두었다가 같은 실수를
 네 번 냈다 — 블록마다 새 셸이라 앞에서 정한 변수가 없었고, 문서라서 한 번도
-안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **20갈래를 실제로 잰다.**
+안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **29갈래를 실제로 잰다.**
 
 스크립트가 하는 일:
 

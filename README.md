@@ -221,7 +221,7 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                시험 163개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 171개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2

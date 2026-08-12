@@ -57,6 +57,13 @@ BASE=$(gh_json baseRefName .baseRefName) || die "PR #$PR 의 base 를 못 읽었
 # 그대로 가면 `git branch -D` 가 **push 안 된 커밋을 날린다.**
 PR_OID=$(gh_json headRefOid .headRefOid) || die "PR #$PR 의 head 커밋을 못 읽었다"
 LOCAL_OID=$(git rev-parse HEAD)
+
+# head **저장소**도 대조한다. 다른 fork 의 동명 브랜치가 같은 커밋을 가리키면
+# 이름도 SHA 도 같아서 통과하고, **내 fork 에서 브랜치를 지운다.**
+PR_OWNER=$(gh_json headRepositoryOwner .headRepositoryOwner.login) \
+    || die "PR #$PR 의 head 저장소 소유자를 못 읽었다"
+PR_REPO=$(gh_json headRepository .headRepository.name) \
+    || die "PR #$PR 의 head 저장소 이름을 못 읽었다"
 [ "$PR_OID" = "$LOCAL_OID" ] \
     || die "PR #$PR 의 head 는 ${PR_OID:0:8} 인데 로컬 HEAD 는 ${LOCAL_OID:0:8} 다.
        push 안 한 커밋이 있거나 다른 저장소의 동명 브랜치다"
@@ -65,14 +72,23 @@ LOCAL_OID=$(git rev-parse HEAD)
 # `--match-head-commit` 이 무의미하다 — 리뷰 뒤에 push 됐다면 그 새 커밋이
 # 이미 head 이기 때문이다. 이 워크플로에는 synchronize 가 없어 **그 커밋은
 # 리뷰를 못 받는다.**
-REVIEWED=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
-    -q '[.[] | .commit_id] | last // empty' 2>/dev/null)
-if [ -z "$REVIEWED" ]; then
-    die "리뷰가 없다. 봇 2개 리뷰를 받은 뒤 머지한다(규칙 7)"
-fi
-[ "$REVIEWED" = "$PR_OID" ] \
-    || die "리뷰는 ${REVIEWED:0:8} 에 붙었는데 head 는 ${PR_OID:0:8} 다.
-       리뷰 뒤에 push 됐다 — 그 커밋은 아무도 안 봤다. 새 브랜치로 다시 올린다"
+# **봇 둘이 각각 현재 head 를 리뷰했는지** 본다. 마지막 리뷰의 커밋만 보면
+# 봇이 옛 SHA 를 리뷰하고 누가 push 한 뒤 다른 사람이 새 head 를 리뷰했을 때
+# 통과한다 — 그 코드는 봇이 안 봤다.
+REVIEWS=$(mktemp)
+bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR/reviews" \
+    -q '.[] | "\(.user.login) \(.commit_id)"' > "$REVIEWS" 2>/dev/null \
+    || { rm "$REVIEWS" 2>/dev/null; die "리뷰 목록을 못 읽었다"; }
+MISSING=
+for bot in ${REQUIRED_BOTS:-codex claude}; do
+    grep -i "$bot" "$REVIEWS" | awk '{print $2}' | grep -qx "$PR_OID" \
+        || MISSING="$MISSING $bot"
+done
+rm "$REVIEWS" 2>/dev/null
+[ -z "$MISSING" ] || die "봇 리뷰가 현재 head(${PR_OID:0:8})에 없다:$MISSING
+       리뷰 뒤에 push 됐거나 아직 안 돌았다 — 그 커밋은 아무도 안 봤다.
+       새 브랜치로 다시 올린다(규칙 7)"
+REVIEWED="$PR_OID"
 
 # head 를 올린 원격. base 와 다를 수 있다(fork). 머지 **전에** 잡아둔다 —
 # `--delete-branch` 가 로컬 브랜치를 지우고 나면 못 구한다.
@@ -80,12 +96,19 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" \
   || echo origin)
+HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
+    || die "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다"
+printf '%s' "$HEAD_URL" | grep -qi "$PR_OWNER/$PR_REPO" \
+    || die "PR #$PR 의 head 는 $PR_OWNER/$PR_REPO 인데
+       내 push 대상은 $HEAD_URL 이다 — 다른 저장소의 동명 브랜치다"
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
 # origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
-BASE_REPO=$(gh_json baseRepository .baseRepository.name 2>/dev/null)
-BASE_OWNER=$(gh_json baseRepository .baseRepository.owner.login 2>/dev/null)
-BASE_REMOTE=$(git remote -v | awk -v o="$BASE_OWNER" -v r="$BASE_REPO" \
-    '$0 ~ o"/"r && /\(fetch\)/ {print $1; exit}')
+# `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.
+BASE_NWO=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR" \
+    -q '.base.repo.full_name' 2>/dev/null)
+BASE_REMOTE=
+[ -n "$BASE_NWO" ] && BASE_REMOTE=$(git remote -v | awk -v n="$BASE_NWO" \
+    'index($0, n) && /\(fetch\)/ {print $1; exit}')
 [ -n "$BASE_REMOTE" ] || BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
 
 # ── 머지 ────────────────────────────────────────────────────────
@@ -115,7 +138,10 @@ done
 # 지울 브랜치에서 먼저 나온다. 실패하면 멈춘다 — 그대로 가면 체크아웃된
 # 브랜치를 지우려다 실패하고, 정리가 된 것처럼 보인다.
 git switch "$BASE" || die "$BASE 로 옮기지 못했다. 워킹트리를 정리하고 다시 부른다"
-bounded 60 git pull --ff-only || printf '  pull 을 못 했다(나중에)\n' >&2
+# 원격을 명시한다. 인자 없이 부르면 브랜치에 설정된 upstream 을 따라가
+# **PR 이 향한 저장소가 아닌 곳**에서 당긴다 — 방금 머지한 변경이 빠진다.
+bounded 60 git pull --ff-only "$BASE_REMOTE" "$BASE" \
+    || printf '  pull 을 못 했다(나중에)\n' >&2
 
 # 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
 # --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
@@ -127,7 +153,13 @@ case $? in
     *)  die "원격 조회 실패 — 지워졌는지 알 수 없어 로컬을 남긴다" ;;
 esac
 
-git branch -D "$BR" 2>/dev/null || printf '  로컬 브랜치가 이미 없다\n' >&2
+if ! git branch -D "$BR" 2>/dev/null; then
+    # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —
+    # 그대로 「정리 완료」를 찍으면 그 브랜치가 재사용 대상으로 남는다.
+    git show-ref --verify -q "refs/heads/$BR" \
+        && die "로컬 브랜치를 못 지웠다(ref 잠김·다른 worktree 에서 체크아웃)" \
+        || printf '  로컬 브랜치가 이미 없다\n' >&2
+fi
 
 # 낡은 추적 ref 는 **브랜치를 올린 그 원격**에서 턴다. 인자 없이 부르면
 # base 쪽만 훑어 fork 의 낡은 ref 가 남는다.

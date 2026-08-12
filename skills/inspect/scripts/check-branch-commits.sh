@@ -16,13 +16,16 @@ ok()  { printf 'PASS — %s\n' "$1"; }
 BR=$(git rev-parse --abbrev-ref HEAD)
 
 # ── 1. 브랜치 전략 ──────────────────────────────────────────────
-case "$BR" in
-    main|master|develop) bad "보호 브랜치($BR)에서 작업하고 있다" ;;
-esac
-
 [ -n "$BASE_BRANCH" ] \
   || BASE_BRANCH=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 [ -n "$BASE_BRANCH" ] || { bad "통합 브랜치를 못 정했다. 인자로 넘긴다"; exit 1; }
+
+# 흔한 이름 셋만 박아두면 프로젝트가 정한 `release` 같은 이름을 놓친다.
+# **인자로 받은 통합 브랜치 자체**도 거부 대상이다.
+case "$BR" in
+    main|master|develop) bad "보호 브랜치($BR)에서 작업하고 있다" ;;
+esac
+[ "$BR" = "$BASE_BRANCH" ] && bad "통합 브랜치($BR)에서 작업하고 있다"
 
 # head 와 base 이름이 ASCII 인가. claude-code-action 이 base 의 비ASCII 를 거부한다.
 printf '%s\n%s\n' "$BR" "$BASE_BRANCH" | LC_ALL=C grep -n '[^ -~]' \
@@ -41,10 +44,28 @@ HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
 [ -n "$HEAD_OWNER" ] || { bad "원격 URL 에서 소유자를 못 뽑았다: $HEAD_URL"; exit 1; }
 
 # 이 브랜치로 PR 이 열렸던 적이 있나. fork 면 parent 를 짚는다.
-UPSTREAM=$(gh repo view --json parent,nameWithOwner \
-  -q '.parent.nameWithOwner // .nameWithOwner' 2>/dev/null)
+# gh 에는 요청 타임아웃 옵션이 없다. 응답이 안 오면 Phase 5 가 통째로 멈추므로
+# 직접 잰다 — merge-cleanup.sh 의 bounded 와 같은 이유다.
+bounded() {
+    local secs="$1"; shift
+    local pid n=0
+    "$@" & pid=$!
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$secs" ]; do sleep 1; n=$((n+1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null
+        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 5 ]; do sleep 1; n=$((n+1)); done
+        kill -KILL "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        return 124
+    fi
+    wait "$pid"
+}
+gh_out() { local o; o=$(mktemp); bounded 30 "$@" > "$o" 2>/dev/null; cat "$o"; rm "$o" 2>/dev/null; }
+
+UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
+  -q '.parent.nameWithOwner // .nameWithOwner')
 if [ -n "$UPSTREAM" ]; then
-    PRIOR=$(gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
+    PRIOR=$(gh_out gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
       --json number,state,headRepositoryOwner \
       -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
              == (\"$HEAD_OWNER\" | ascii_downcase))] | .[0] // empty" 2>/dev/null)
@@ -77,8 +98,11 @@ git log --oneline "$BASE"..HEAD
 git log --format='%H %s' "$BASE"..HEAD | while read -r sha subject; do
     case "$subject" in refactor:*|docs:*|chore:*) continue ;; esac
     files=$(git show --name-only --format= "$sha")
-    has_test=$(printf '%s\n' "$files" | grep -ciE '(test|spec)' || true)
-    has_src=$(printf '%s\n' "$files"  | grep -civE '(test|spec)' || true)
+    # 경로 요소·접미사로만 잡는다. 부분문자열로 보면 `ContestService.java` 가
+    # 테스트로, `Foo.java` 가 소스로 잡혀 **갈라진 커밋이 통과한다.**
+    TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)[^/]*([._-](test|spec)|Test|Tests|Spec|IT)\.[A-Za-z]+$'
+    has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
+    has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" | grep -c . || true)
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
     printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject"
 done
