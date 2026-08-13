@@ -133,6 +133,16 @@ r 0 "$(feed $'"gh api repos/o/r/pulls/1/reviews --paginate"')" \
 r 0 "$(feed $'"gh api --hostname github.com repos/o/r/issues/1/comments"')" \
    '코멘트 조회도 통과한다'
 
+echo "── 거짓 차단 (PR #72 봇 지적) ──"
+# jq 식 안의 문자열에 ` -f` 가 들어가도 조회는 통과해야 한다.
+r 0 "$(feed $'"gh api repos/o/r/issues/1/comments --jq \'.[] | select(.body == \\" -foo\\")\'"')" \
+   'jq 식 안의 -foo 를 필드 플래그로 오인하지 않는다'
+r 0 "$(feed $'"gh api repos/o/r/pulls/1/reviews -q \'.[] | .body\'"')" \
+   '필터가 붙은 조회도 통과한다'
+# 그래도 진짜 필드 플래그는 잡는다.
+r 2 "$(feed $'"gh api repos/o/r/issues/1/comments -f body=x"')" \
+   '소문자 단축형은 여전히 막는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

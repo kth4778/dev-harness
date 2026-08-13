@@ -71,7 +71,9 @@ case "$2" in
     case "$*" in
       # 스크립트는 이 URL 로 base 저장소를 확정한다(fork 에서 fork 를
       # 조회하지 않게). `pull/<번호>` 앞이 곧 owner/repo 다.
-      *' url'*|*'.url'*)      printf 'https://github.com/%s/pull/1\n' "${GH_NWO:-me/work}" ;;
+      # 시험의 원격은 로컬 경로다 — PR URL 도 같은 형태로 준다. 그래야 push URL 과
+      # 같은 잣대(호스트 없음끼리)로 비교된다. GH_PR_URL 로 덮어쓸 수 있다.
+      *' url'*|*'.url'*)      printf '%s/pull/1\n' "${GH_PR_URL:-$R/${GH_NWO:-me/work}}" ;;
       *headRefName*)          printf '%s\n' "${GH_HEAD:-feature/x}" ;;
       *baseRefName*)          printf '%s\n' "${GH_BASE:-main}" ;;
       *headRefOid*)           printf '%s\n' "${GH_OID}" ;;
@@ -293,16 +295,21 @@ r 1 "$(grep -c 'remove-section' "$SCRIPT" || true)" \
 # `GH_HOST=` 를 만드는 줄만 본다. BASE_REMOTE 폴백이 같은 설정을 읽는 것은
 # 정당하다 — 거기는 「어느 원격에서 당길까」를 고르는 자리다.
 # 이제 PR URL 에서 호스트를 한 번 뽑아(API_HOST) 그것을 재사용한다.
-r 1 "$(grep -c 'API_HOST=$(printf' "$SCRIPT" || true)" \
-   'PR 호스트를 PR 자신의 URL 에서 구한다'
-r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'API_HOST=$(printf' || true)" \
-   'gh 에 넘길 호스트는 원형 그대로 둔다'
+# PR URL 도 push URL 과 **같은 함수**로 푼다 — 따로 짠 정규식은 로컬 경로에서
+# 다른 답을 내서 비교가 어긋났다.
+r 1 "$(grep -c 'API_NWO=$(url_nwo "$PR_BASEURL")' "$SCRIPT" || true)" \
+   'PR 저장소를 url_nwo 로 푼다'
+r 1 "$(grep -c 'API_HOST=$(url_host "$PR_BASEURL")' "$SCRIPT" || true)" \
+   'PR 호스트를 url_host 로 푼다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'API_HOST=$(printf' || true)" \
+   '호스트를 따로 짠 정규식으로 뽑지 않는다'
 
 echo "── codex 지적 (PR #61) ──"
 # Enterprise 에 있는 PR 은 gh api 기본 호스트(github.com)로 조회하면 증거를
 # 못 봐서 **항상** 막힌다. 네 조회 전부에 호스트를 넘겨야 한다.
-r 4 "$(grep -c 'gh api --hostname' "$SCRIPT" || true)" \
-   'gh api 조회 전부에 PR 호스트를 넘긴다'
+# 호스트가 있을 때만 넘긴다 — 로컬 경로 PR 에는 호스트가 없다.
+r 4 "$(grep -c 'gh api ${API_HOST:+--hostname' "$SCRIPT" || true)" \
+   'gh api 조회 전부에 PR 호스트를 넘긴다(있을 때만)'
 
 # `claude[bot]` 은 파일명 패턴이기도 하다 — 인용 없이 확장하면 파일명으로 바뀐다.
 fresh
@@ -524,6 +531,17 @@ r 0 "$rc" '로컬에 base 가 없어도 정리까지 끝난다'
 r "main" "$(git rev-parse --abbrev-ref HEAD)" 'base 를 만들어 그쪽에 서 있다'
 printf '%s' "$out" | grep -q "만들어 옮겼다" \
   && r y y '무엇을 했는지 알린다' || r y n '무엇을 했는지 알린다'
+
+echo "── codex 지적 (PR #72) ──"
+# PR 에 호스트가 있는데 push 대상이 로컬 경로면, 같은 이름이어도 딴 저장소다.
+fresh
+git remote set-url --push origin "$R/me/work"
+out=$(GH_PR_URL="https://github.com/me/work" run); rc=$?
+r 1 "$rc" 'PR 은 원격인데 push 대상이 로컬 경로면 멈춘다'
+printf '%s' "$out" | grep -q "호스트가 없는 경로" \
+  && r y y '무엇이 문제인지 알린다' || r y n '무엇이 문제인지 알린다'
+r 1 "$(git ls-remote --heads "$R/me/work" feature/x | grep -c . || true)" \
+   '그때는 아무것도 안 지운다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

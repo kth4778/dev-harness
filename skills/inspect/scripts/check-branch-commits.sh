@@ -330,8 +330,13 @@ while read -r sha subject; do
     # 목록이 비어 아래 `continue` 로 빠지고, 테스트 없는 구현을 들여온 merge
     # 커밋이 그대로 통과한다 (codex, PR #68). 첫 부모와의 diff 를 낸다.
     # 일반 커밋에도 같은 결과다 — 실측으로 확인했다.
-    files_all=$(git show --name-only --format= -m --first-parent "$sha")
-    files=$(git show --name-only --format= -m --first-parent --diff-filter=d "$sha")
+    # 조회 **실패**를 빈 커밋으로 읽지 않는다. 부분 클론에서 blob 을 못 받거나
+    # 객체가 깨지면 출력이 비는데, 그대로 두면 그 커밋의 분류를 통째로 건너뛰고
+    # **Phase 5 가 거짓 PASS** 한다 (codex, PR #72). 또 실패 삼킴이다.
+    files_all=$(git show --name-only --format= -m --first-parent "$sha") \
+      || { bad "커밋 ${sha:0:8} 의 변경 목록을 못 읽었다(객체 손상·부분 클론)"; exit 1; }
+    files=$(git show --name-only --format= -m --first-parent --diff-filter=d "$sha") \
+      || { bad "커밋 ${sha:0:8} 의 변경 목록을 못 읽었다(객체 손상·부분 클론)"; exit 1; }
     [ -n "$files_all" ] || continue
 
     # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나

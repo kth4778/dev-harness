@@ -51,6 +51,45 @@ gh_json() {
 
 die() { printf '차단됨 — %s\n' "$1" >&2; exit 1; }
 
+# 진단에 URL 을 실을 때는 **자격 증명을 가린다.** `https://user:token@host/...`
+# 형태가 그대로 stderr 에 실리면 훅·시험·CI 로그에 토큰이 남는다 (codex, PR #65).
+redact() {
+    printf '%s' "$1" | sed -E 's#(://)[^@/]*@#\1***@#'
+}
+url_nwo() {
+    printf '%s' "$1" \
+      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
+      | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
+}
+# 호스트도 본다. `owner/repo` 만 맞추면 github.com 과 사내 GitLab 미러가
+# 같아 보여, GitHub PR 을 머지하고 **다른 서버의 동명 브랜치를 지운다**
+# (codex, PR #56).
+# **포트까지 남긴다.** 사내 미러가 `host:8443` 과 `host:9443` 처럼 포트로만
+# 갈리면, 포트를 버린 비교는 둘을 같은 서버로 본다 (codex, PR #59).
+url_host() {
+    local u="$1" h scheme
+    case "$u" in
+        *://*)  # scheme 이 있으면 `:` 뒤는 포트다 — 남긴다
+            scheme=$(printf '%s' "$u" | sed -E 's#://.*$##' | tr '[:upper:]' '[:lower:]')
+            h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
+        *)      # scp 형태(host:path) — `:` 뒤는 경로다. 포트를 쓸 수 없다
+            scheme=ssh
+            h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
+    esac
+    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+    # **프로토콜의 기본 포트는 뗀다.** `ssh://git@github.com:22/…` 를 명시하는
+    # 구성이 있는데, PR URL 쪽은 포트가 없어 **같은 서버를 다른 서버로 판정**해
+    # 머지 전에 막혔다 (codex, PR #66). 기본이 아닌 포트는 그대로 둔다 —
+    # 사내 미러가 포트로만 갈리는 경우를 여전히 가려야 한다.
+    case "$scheme:$h" in
+        ssh:*:22)    h=${h%:22} ;;
+        https:*:443) h=${h%:443} ;;
+        http:*:80)   h=${h%:80} ;;
+        git:*:9418)  h=${h%:9418} ;;
+    esac
+    printf '%s' "$h"
+}
+
 # ── PR 이 정말 이 브랜치의 것인지 먼저 확인한다 ─────────────────
 # `gh pr merge <N>` 은 번호로 지정한 PR 을 머지하는데, 정리는 체크아웃된
 # 브랜치를 지운다. 번호를 잘못 넣거나 체크아웃을 빠뜨리면 **아무 상관 없는
@@ -63,12 +102,14 @@ PR_HEAD=$(gh_json headRefName .headRefName) || die "PR #$PR 을 못 읽었다"
 # 놓치거나 404 로 막힌다** (codex, PR #59). `gh pr view` 는 fork 를 감지해
 # upstream 을 보므로, 그 URL 로 저장소를 확정하고 이후 API 를 전부 묶는다.
 PR_URL=$(gh_json url .url) || die "PR #$PR 의 URL 을 못 읽었다"
-API_NWO=$(printf '%s' "$PR_URL" | sed -E 's#^[a-z]+://[^/]+/##; s#/pull/[0-9]+.*$##')
+# `pull/<번호>` 를 먼저 떼고 **push URL 과 같은 함수**로 푼다. 따로 짠 정규식은
+# 로컬 경로 URL 에서 다른 답을 내서, 두 쪽 비교가 어긋났다 (codex, PR #72).
+PR_BASEURL=$(printf '%s' "$PR_URL" | sed -E 's#/pull/[0-9]+.*$##')
+API_NWO=$(url_nwo "$PR_BASEURL")
 # **호스트도 여기서 뽑는다.** `gh api` 의 기본 호스트는 github.com 이라,
 # Enterprise 에 있는 PR 은 봇 증거가 실제로 있어도 전부 MISSING 으로 판정돼
 # 머지·정리가 **항상** 막혔다 (codex, PR #61).
-API_HOST=$(printf '%s' "$PR_URL" | sed -E 's#^[a-z]+://##; s#/.*$##')
-[ -n "$API_HOST" ] || die "PR URL 에서 호스트를 못 뽑았다: $PR_URL"
+API_HOST=$(url_host "$PR_BASEURL")
 case "$API_NWO" in
     */*) : ;;
     *)   die "PR URL 에서 저장소를 못 뽑았다: $PR_URL" ;;
@@ -143,11 +184,11 @@ BOTS=( "chatgpt-codex-connector[bot]" "claude[bot]" )
 seen_bot_sha() {                   # $1 = 정확한 로그인
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/pulls/$PR/reviews" \
+    bounded 30 gh api ${API_HOST:+--hostname "$API_HOST"} --paginate "repos/$API_NWO/pulls/$PR/reviews" \
         -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
     grep -qx "$PR_OID" "$f" && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/pulls/$PR/comments" \
+        bounded 30 gh api ${API_HOST:+--hostname "$API_HOST"} --paginate "repos/$API_NWO/pulls/$PR/comments" \
             -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
         grep -qx "$PR_OID" "$f" && rc=0
     fi
@@ -163,11 +204,11 @@ seen_bot_sha() {                   # $1 = 정확한 로그인
 seen_bot_shaless() {
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/issues/$PR/comments" \
+    bounded 30 gh api ${API_HOST:+--hostname "$API_HOST"} --paginate "repos/$API_NWO/issues/$PR/comments" \
         -q ".[] | select(.user.login == \"$bot\") | .id" > "$f" 2>/dev/null
     [ -s "$f" ] && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/issues/$PR/reactions" \
+        bounded 30 gh api ${API_HOST:+--hostname "$API_HOST"} --paginate "repos/$API_NWO/issues/$PR/reactions" \
             -q ".[] | select(.user.login == \"$bot\" and .content == \"+1\") | .id" \
             > "$f" 2>/dev/null
         [ -s "$f" ] && rc=0
@@ -215,44 +256,6 @@ HEAD_URL=$(printf '%s\n' "$HEAD_URLS" | awk 'NR==1{print}')
 # URL 을 `owner/repo` 로 **정규화해서 정확히** 비교한다. 부분문자열로 보면
 # `me/work` 가 `me/work-backup` 에, `bob/h` 가 `alicebob/h` 에 들어맞아
 # **엉뚱한 원격에서 브랜치를 지운다.**
-# 진단에 URL 을 실을 때는 **자격 증명을 가린다.** `https://user:token@host/...`
-# 형태가 그대로 stderr 에 실리면 훅·시험·CI 로그에 토큰이 남는다 (codex, PR #65).
-redact() {
-    printf '%s' "$1" | sed -E 's#(://)[^@/]*@#\1***@#'
-}
-url_nwo() {
-    printf '%s' "$1" \
-      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
-      | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
-}
-# 호스트도 본다. `owner/repo` 만 맞추면 github.com 과 사내 GitLab 미러가
-# 같아 보여, GitHub PR 을 머지하고 **다른 서버의 동명 브랜치를 지운다**
-# (codex, PR #56).
-# **포트까지 남긴다.** 사내 미러가 `host:8443` 과 `host:9443` 처럼 포트로만
-# 갈리면, 포트를 버린 비교는 둘을 같은 서버로 본다 (codex, PR #59).
-url_host() {
-    local u="$1" h scheme
-    case "$u" in
-        *://*)  # scheme 이 있으면 `:` 뒤는 포트다 — 남긴다
-            scheme=$(printf '%s' "$u" | sed -E 's#://.*$##' | tr '[:upper:]' '[:lower:]')
-            h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
-        *)      # scp 형태(host:path) — `:` 뒤는 경로다. 포트를 쓸 수 없다
-            scheme=ssh
-            h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
-    esac
-    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
-    # **프로토콜의 기본 포트는 뗀다.** `ssh://git@github.com:22/…` 를 명시하는
-    # 구성이 있는데, PR URL 쪽은 포트가 없어 **같은 서버를 다른 서버로 판정**해
-    # 머지 전에 막혔다 (codex, PR #66). 기본이 아닌 포트는 그대로 둔다 —
-    # 사내 미러가 포트로만 갈리는 경우를 여전히 가려야 한다.
-    case "$scheme:$h" in
-        ssh:*:22)    h=${h%:22} ;;
-        https:*:443) h=${h%:443} ;;
-        http:*:80)   h=${h%:80} ;;
-        git:*:9418)  h=${h%:9418} ;;
-    esac
-    printf '%s' "$h"
-}
 MY_NWO=$(url_nwo "$HEAD_URL")
 MY_HOST=$(url_host "$HEAD_URL")
 PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
@@ -271,6 +274,12 @@ GH_HOST=$(url_host "$PR_URL")
        — 다른 저장소의 동명 브랜치다"
 # 한쪽이 비면 대조할 것이 없다 — 로컬 경로 원격이나 bundle 은 호스트가 없다.
 # `owner/repo` 대조는 위에서 이미 통과했으므로 더 가릴 것이 없다.
+# PR 에는 호스트가 있는데 push 대상에는 없다 = 로컬 경로 원격이다. `owner/repo`
+# 만 같은 **딴 저장소**일 수 있고, 그것을 확인할 방법이 없다 — 지우지 않는다
+# (codex, PR #72). 둘 다 없으면(로컬끼리) 대조할 것이 없다.
+[ -z "$GH_HOST" ] || [ -n "$MY_HOST" ] \
+    || die "PR 은 $GH_HOST 의 것인데 push 대상은 호스트가 없는 경로다($(redact "$HEAD_URL")).
+       같은 이름이어도 다른 저장소일 수 있다 — 지우지 않는다"
 [ -z "$GH_HOST" ] || [ -z "$MY_HOST" ] || [ "$MY_HOST" = "$GH_HOST" ] \
     || die "PR 은 $GH_HOST 의 것인데 내 push 대상은 $MY_HOST 다
        — 같은 이름이지만 다른 서버다. 지우지 않는다"
@@ -282,6 +291,8 @@ while IFS= read -r u; do
     [ "$un" = "$PR_NWO" ] \
         || die "원격 '$HEAD_REMOTE' 의 push URL 중 $(redact "$u") 가 $PR_NWO 가 아니다($un).
        이 이름으로 지우면 그쪽에서도 지워진다 — 멈춘다"
+    [ -z "$GH_HOST" ] || [ -n "$uh" ] \
+        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $(redact "$u") 는 호스트가 없는 경로다 — 멈춘다"
     [ -z "$GH_HOST" ] || [ -z "$uh" ] || [ "$uh" = "$GH_HOST" ] \
         || die "원격 '$HEAD_REMOTE' 의 push URL 중 $(redact "$u") 가 다른 서버($uh)다 — 멈춘다"
 done <<URLEOF
@@ -339,7 +350,7 @@ ALLOW=$(mktemp)
 # 실패하면 빈 파일을 읽고 기본값을 깔았는데, merge commit 이 꺼진 저장소에서도
 # `--merge` 를 골라 **Phase 6 가 막혔다** — 쓸 수 있는 대체 전략이 있는데도
 # 그렇다 (codex, PR #63). 실패는 실패로 낸다.
-if bounded 30 gh repo view "$API_HOST/$BASE_NWO" \
+if bounded 30 gh repo view "${API_HOST:+$API_HOST/}$BASE_NWO" \
     --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
     -q '"\(.mergeCommitAllowed) \(.squashMergeAllowed) \(.rebaseMergeAllowed)"' \
     > "$ALLOW" 2>/dev/null; then
@@ -375,7 +386,7 @@ fi
 # 한 번 더** 시도한다 (codex, PR #69). 그러지 않으면 rebase 가 열려 있어도
 # Phase 6 이 통째로 멈춘다.
 try_merge() {
-    bounded 60 gh pr merge "$PR" -R "$API_HOST/$API_NWO" "$1" \
+    bounded 60 gh pr merge "$PR" -R "${API_HOST:+$API_HOST/}$API_NWO" "$1" \
         --match-head-commit "$REVIEWED"
 }
 if ! try_merge "$STRAT"; then

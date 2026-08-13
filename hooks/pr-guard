@@ -121,9 +121,16 @@ case "$norm" in
                 # `-fbody=x` 를 놓쳤다 — `gh api … -F body='사람 리뷰'` 로
                 # 실제 코멘트가 만들어졌다 (codex, PR #71 이 재현).
                 # 필드가 하나라도 붙으면 gh 는 기본 메서드를 POST 로 바꾼다.
+                # **토큰 경계**로 본다. ` -f` 를 부분문자열로 찾으면 jq 식
+                # 안의 문자열(`select(.body == " -foo")`)까지 걸려, 읽기만 하는
+                # 조회가 막힌다 (codex, PR #72). 플래그 뒤에는 공백·`=`·
+                # `이름=` 중 하나가 온다.
+                FIELDPAT='(^| )(-[fF]([ =]|[A-Za-z_][A-Za-z0-9_]*=)|--(raw-)?field([ =]|$))'
+                if [ "$(printf '%s' "$norm" | grep -Ec "$FIELDPAT" || true)" -gt 0 ]; then
+                    deny "gh api로 리뷰·코멘트 생성"
+                fi
                 case "$norm" in
-                    *"-X POST"*|*"--method POST"*|*"--input"* \
-                    |*" -f"*|*" -F"*|*"--field"*|*"--raw-field"*)
+                    *"-X POST"*|*"--method POST"*|*"--input"*)
                         deny "gh api로 리뷰·코멘트 생성"
                         ;;
                 esac
