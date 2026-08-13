@@ -175,8 +175,14 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" \
   || echo origin)
-HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
+# **push URL 이 여럿일 수 있다.** 첫 것만 검증하는데 `git push <이름> --delete` 는
+# 전부에 삭제를 보낸다 — 검증하지 않은 미러에서 동명 브랜치가 지워지거나, 뒤쪽
+# 원격에서 lease 가 거부돼 **앞쪽만 지워진 부분 성공**으로 끝난다
+# (codex, PR #64). 전부 열거해 각각 검증하고, 삭제도 URL 별로 한다.
+HEAD_URLS=$(git remote get-url --push --all "$HEAD_REMOTE" 2>/dev/null) \
     || die "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다"
+HEAD_URL=$(printf '%s\n' "$HEAD_URLS" | awk 'NR==1{print}')
+
 
 # URL 을 `owner/repo` 로 **정규화해서 정확히** 비교한다. 부분문자열로 보면
 # `me/work` 가 `me/work-backup` 에, `bob/h` 가 `alicebob/h` 에 들어맞아
@@ -217,6 +223,19 @@ GH_HOST=$(printf '%s' "$API_HOST" | tr '[:upper:]' '[:lower:]')
 [ -z "$GH_HOST" ] || [ -z "$MY_HOST" ] || [ "$MY_HOST" = "$GH_HOST" ] \
     || die "PR 은 $GH_HOST 의 것인데 내 push 대상은 $MY_HOST 다
        — 같은 이름이지만 다른 서버다. 지우지 않는다"
+
+# 나머지 push URL 도 같은 잣대로 본다. 하나라도 어긋나면 아무것도 지우지 않는다.
+while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    un=$(url_nwo "$u"); uh=$(url_host "$u")
+    [ "$un" = "$PR_NWO" ] \
+        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $u 가 $PR_NWO 가 아니다($un).
+       이 이름으로 지우면 그쪽에서도 지워진다 — 멈춘다"
+    [ -z "$GH_HOST" ] || [ -z "$uh" ] || [ "$uh" = "$GH_HOST" ] \
+        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $u 가 다른 서버($uh)다 — 멈춘다"
+done <<URLEOF
+$HEAD_URLS
+URLEOF
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
 # origin/main 을 당겨 방금 머지한 변경이 빠진 base 에서 다음 작업이 시작된다.
 # `gh pr view` 에는 baseRepository 필드가 없다(2.96 확인). API 로 직접 읽는다.
@@ -350,6 +369,18 @@ else
         "$BASE" >&2
 fi
 
+# `git branch -D` 는 다른 worktree 가 체크아웃한 브랜치를 거부한다. 원자성을
+# 얻으려고 `update-ref -d` 로 바꾸면서 **그 보호를 잃었다** — 지우면 그
+# worktree 가 unborn 상태가 되어 커밋 참조를 잃는다 (codex, PR #59).
+#
+# **원격을 지우기 전에** 본다. 뒤에 두었더니 원격만 지워진 뒤 로컬을 못 지우는
+# **부분 정리 상태**가 됐고, 다시 불러도 원격이 없어 복구가 안 됐다
+# (codex, PR #64). 하나라도 못 지울 상황이면 아무것도 안 지운다.
+# (`grep -c` 를 쓴다 — `-q` 는 파이프에서 SIGPIPE 를 부른다.)
+if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || true)" -gt 0 ]; then
+    die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
+fi
+
 # 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
 # --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
 RLS=$(mktemp)
@@ -371,7 +402,9 @@ case $? in
             # 원격이 그 사이 움직였으면 git 이 「stale info」로 거부한다
             # (codex, PR #57. 두 갈래를 실측했다: 옛 lease→1·브랜치 유지,
             #  맞는 lease→0·삭제).
-            bounded 60 git push "$HEAD_REMOTE" \
+            # 이름 대신 **URL 을 하나씩** 짚는다. 이름으로 부르면 모든 push URL 에
+            # 한꺼번에 가서, 뒤쪽이 거부되면 앞쪽만 지워진 상태로 끝난다.
+            bounded 60 git push "$HEAD_URL" \
                 --force-with-lease="refs/heads/$BR:$REVIEWED" --delete "$BR" \
                 || { rm "$RLS" 2>/dev/null
                      die "원격 삭제가 거부됐다. 조회 뒤 누가 push 했다 — 눈으로 확인한다"; }
@@ -397,14 +430,6 @@ NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
 # 는 현재 값을 안 보고 지우므로 그 틈이 남는다. `update-ref -d <ref> <옛값>` 은
 # 옛값과 다르면 거부한다 — 대조와 삭제가 한 동작이 된다 (codex, PR #58).
 # 두 갈래를 실측했다: 옛값→종료 1·브랜치 유지, 맞는 값→종료 0·삭제.
-# `git branch -D` 는 다른 worktree 가 체크아웃한 브랜치를 거부한다. 원자성을
-# 얻으려고 `update-ref -d` 로 바꾸면서 **그 보호를 잃었다** — 지우면 그
-# worktree 가 unborn 상태가 되어 커밋 참조를 잃는다 (codex, PR #59).
-# 직접 확인한다. (`grep -c` 를 쓴다 — `-q` 는 파이프에서 SIGPIPE 를 부른다.)
-if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || true)" -gt 0 ]; then
-    die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
-fi
-
 # ref 를 지운 뒤 `branch.<이름>.*` 설정도 지운다. 안 지우면 같은 이름으로 다시
 # 판 브랜치가 **옛 upstream 을 그대로 물려받고**, 이 스크립트의 HEAD_REMOTE
 # 계산도 낡은 원격을 고른다 (codex, PR #60).

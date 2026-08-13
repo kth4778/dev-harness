@@ -103,13 +103,15 @@ UPSTREAM=
 if [ -n "$HEAD_OWNER" ]; then
     # 실패를 삼키면 UPSTREAM 이 비어 「건너뛴다」 갈래로 빠지고 **재사용 검사가
     # 조용히 꺼진다.** git fetch 인증은 되는데 gh 인증만 없는 경우가 실제로 있다.
-    UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
-      -q '.parent.nameWithOwner // .nameWithOwner') \
+    # **한 호출로 받는다.** 두 번 부르면 두 번째만 실패했을 때 URL 이 비고,
+    # 그러면 아래 호스트 대조가 **조용히 꺼진다** — 이 검사가 막으려는 오판이
+    # 조회 한 번의 실패로 다시 열린다 (codex, PR #64).
+    # 실패를 삼키는 함정을 이 세션에서 또 밟았다.
+    UP_RAW=$(gh_out gh repo view --json parent,nameWithOwner,url \
+      -q '[(.parent.nameWithOwner // .nameWithOwner), (.parent.url // .url)] | @tsv') \
       || { bad "gh 로 저장소를 못 읽었다(인증·네트워크). 재사용 검사를 통과로 두지 않는다"; exit 1; }
-    # 호스트 대조에 쓸 URL 도 함께 받는다. 실패해도 막지 않는다 — 없으면 아래에서
-    # 호스트 대조를 건너뛴다.
-    UPSTREAM_URL=$(gh_out gh repo view --json parent,url \
-      -q '.parent.url // .url' 2>/dev/null) || UPSTREAM_URL=
+    UPSTREAM=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print $1}')
+    UPSTREAM_URL=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print $2}')
 fi
 if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
@@ -312,10 +314,18 @@ while read -r sha subject; do
             lines=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
                       | sed -nE 's/^@@ -[0-9,]+ \+([0-9]+).*/\1/p' | sort -n)
             [ -n "$lines" ] || continue
+            # **지워진 줄에 테스트 표식이 있으면 테스트를 건드린 것이다.**
+            # 경계를 커밋 이후 파일에서만 찾으면, 구현과 인라인 테스트를 함께
+            # 걷어낸 정상 커밋이 「구현만」으로 오판된다 (codex, PR #64).
+            gone_test=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
+                          | grep '^-' | grep -cE "$INLINE_TEST" || true)
+            [ "$gone_test" -gt 0 ] && touched_test=1
+
             tstart=$(git show "$sha:$f" 2>/dev/null \
                        | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
             if [ -z "$tstart" ]; then
-                # 테스트 표식이 없는 파일 — 전부 구현이다.
+                # 커밋 뒤에 테스트 표식이 없다 — 남은 것은 전부 구현이다.
+                # (테스트를 지운 경우라면 위에서 touched_test 를 이미 세웠다.)
                 touched_src=1
                 continue
             fi

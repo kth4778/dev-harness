@@ -362,6 +362,29 @@ out=$(run); rc=$?
 r 0 "$rc" 'push URL 로 조회해도 정상 경로가 돈다'
 r "" "$(git ls-remote --heads "$R/me/work" feature/x)" '원격 브랜치가 지워졌다'
 
+echo "── codex 지적 (PR #64) ──"
+# push URL 이 둘이면 둘 다 검증해야 한다. 하나가 다른 저장소면 멈춘다.
+fresh
+git remote set-url --push origin "$R/me/work"
+mkdir -p "$R/other"; git init -q --bare -b main "$R/other/work"
+git remote set-url --add --push origin "$R/other/work"
+out=$(run); rc=$?
+r 1 "$rc" 'push URL 이 둘이고 하나가 다른 저장소면 멈춘다'
+r 1 "$(git ls-remote --heads "$R/me/work" feature/x | grep -c . || true)" \
+   '그때는 원격 브랜치도 그대로다'
+r "feature/x" "$(git branch --show-current)" '그때는 로컬 브랜치도 그대로다'
+
+# worktree 검사는 **원격 삭제 앞**에 있어야 한다. 뒤에 있으면 원격만 지워진
+# 부분 정리 상태가 되고, 다시 불러도 원격이 없어 복구가 안 된다.
+#
+# 이 상황은 스크립트가 도는 **중간에** 다른 worktree 가 끼어드는 것이라 실행으로
+# 재현할 수 없다. 코드에서 두 검사의 순서를 잰다.
+wt_line=$(grep -n 'git worktree list' "$SCRIPT" | awk -F: 'NR==1{print $1}')
+del_line=$(grep -n 'force-with-lease' "$SCRIPT" | awk -F: 'NR==1{print $1}')
+r y "$([ -n "$wt_line" ] && [ -n "$del_line" ] && [ "$wt_line" -lt "$del_line" ] \
+        && echo y || echo n)" \
+   'worktree 검사가 원격 삭제보다 앞에 있다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

@@ -353,6 +353,26 @@ git switch -qc feature/bothinline
 git add .; git commit -qm "feat: 구현을 고치고 테스트를 붙인다"
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 인라인 테스트를 함께 넣으면 통과한다'
 
+echo "── codex 지적 (PR #64) ──"
+# 구현과 인라인 테스트를 **한 커밋에서 함께 걷어내는** 것은 규칙에 맞는 모양이다.
+fresh
+mkdir -p src
+{ printf 'fn keep(){}\n'
+  printf 'fn gone()->i32{1}\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(gone(),1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/removeinline
+printf 'fn keep(){}\n' > src/lib.rs      # 구현과 테스트를 함께 지운다
+git add .; git commit -qm "feat: 기능을 인라인 테스트째로 걷어낸다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 인라인 테스트를 함께 지운 커밋은 통과한다'
+
+# gh 조회가 한 번이어야 한다 — 두 번 부르면 뒤쪽 실패로 호스트 대조가 꺼진다.
+r 1 "$(grep -c 'json parent,nameWithOwner,url' "$SCRIPT" || true)" \
+   'upstream NWO 와 URL 을 한 호출로 받는다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'json parent,url' || true)" \
+   'URL 을 따로 조회하지 않는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
