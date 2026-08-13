@@ -57,6 +57,11 @@ PR_HEAD=$(gh_json headRefName .headRefName) || die "PR #$PR 을 못 읽었다"
 # upstream 을 보므로, 그 URL 로 저장소를 확정하고 이후 API 를 전부 묶는다.
 PR_URL=$(gh_json url .url) || die "PR #$PR 의 URL 을 못 읽었다"
 API_NWO=$(printf '%s' "$PR_URL" | sed -E 's#^[a-z]+://[^/]+/##; s#/pull/[0-9]+.*$##')
+# **호스트도 여기서 뽑는다.** `gh api` 의 기본 호스트는 github.com 이라,
+# Enterprise 에 있는 PR 은 봇 증거가 실제로 있어도 전부 MISSING 으로 판정돼
+# 머지·정리가 **항상** 막혔다 (codex, PR #61).
+API_HOST=$(printf '%s' "$PR_URL" | sed -E 's#^[a-z]+://##; s#/.*$##')
+[ -n "$API_HOST" ] || die "PR URL 에서 호스트를 못 뽑았다: $PR_URL"
 case "$API_NWO" in
     */*) : ;;
     *)   die "PR URL 에서 저장소를 못 뽑았다: $PR_URL" ;;
@@ -104,17 +109,20 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
 # **환경변수로 바꾸지 못하게 고정한다.** 규칙 7 은 봇 딱 2 개를 요구하는데
 # 목록을 밖에서 넘길 수 있으면 그 규칙이 무의미해진다 — `REQUIRED_BOTS=' '`
 # 하나로 리뷰 증거가 전혀 없는 PR 이 머지 단계로 넘어갔다 (codex, PR #59).
-BOTS="chatgpt-codex-connector[bot] claude[bot]"
+# **배열로 둔다.** `claude[bot]` 은 파일명 패턴이기도 해서, 작업 폴더에
+# `claudeb` 같은 파일이 있으면 인용 없는 확장이 로그인을 파일명으로 바꾼다 —
+# 정상 리뷰가 있어도 MISSING 으로 판정된다 (codex, PR #61).
+BOTS=( "chatgpt-codex-connector[bot]" "claude[bot]" )
 
 # SHA 있는 증거(리뷰·인라인 코멘트)만 자동으로 받는다.
 seen_bot_sha() {                   # $1 = 정확한 로그인
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --paginate "repos/$API_NWO/pulls/$PR/reviews" \
+    bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/pulls/$PR/reviews" \
         -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
     grep -qx "$PR_OID" "$f" && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --paginate "repos/$API_NWO/pulls/$PR/comments" \
+        bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/pulls/$PR/comments" \
             -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
         grep -qx "$PR_OID" "$f" && rc=0
     fi
@@ -130,11 +138,11 @@ seen_bot_sha() {                   # $1 = 정확한 로그인
 seen_bot_shaless() {
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --paginate "repos/$API_NWO/issues/$PR/comments" \
+    bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/issues/$PR/comments" \
         -q ".[] | select(.user.login == \"$bot\") | .id" > "$f" 2>/dev/null
     [ -s "$f" ] && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --paginate "repos/$API_NWO/issues/$PR/reactions" \
+        bounded 30 gh api --hostname "$API_HOST" --paginate "repos/$API_NWO/issues/$PR/reactions" \
             -q ".[] | select(.user.login == \"$bot\" and .content == \"+1\") | .id" \
             > "$f" 2>/dev/null
         [ -s "$f" ] && rc=0
@@ -144,7 +152,7 @@ seen_bot_shaless() {
 }
 
 MISSING= ; SHALESS=
-for bot in $BOTS; do
+for bot in "${BOTS[@]}"; do
     seen_bot_sha "$bot" && continue
     if seen_bot_shaless "$bot"; then SHALESS="$SHALESS $bot"; else MISSING="$MISSING $bot"; fi
 done
@@ -175,7 +183,7 @@ HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
 # **엉뚱한 원격에서 브랜치를 지운다.**
 url_nwo() {
     printf '%s' "$1" \
-      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#\.git$##; s#/$##' \
+      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
       | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
 }
 # 호스트도 본다. `owner/repo` 만 맞추면 github.com 과 사내 GitLab 미러가
@@ -200,7 +208,7 @@ PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # **PR 자신의 URL 에서 구한다.** 로컬 원격 설정에서 구하면, 통합 브랜치가
 # 사내 미러를 추적하는 구성에서 정상 head 를 「다른 서버」로 오판해 아래의
 # 올바른 base 탐색에 닿기도 전에 멈춘다 (codex, PR #60).
-GH_HOST=$(url_host "$PR_URL")
+GH_HOST=$(printf '%s' "$API_HOST" | tr '[:upper:]' '[:lower:]')
 [ "$MY_NWO" = "$PR_NWO" ] \
     || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($HEAD_URL) 다
        — 다른 저장소의 동명 브랜치다"
@@ -256,7 +264,7 @@ STRAT=--merge
 ALLOW=$(mktemp)
 # base 저장소의 설정을 읽는다. 인자 없이 부르면 현재 폴더의 저장소(fork)를
 # 보므로, fork 와 upstream 설정이 다르면 엉뚱한 전략을 고른다 (codex, PR #56).
-bounded 30 gh repo view ${BASE_NWO:+"$BASE_NWO"} \
+bounded 30 gh repo view "$API_HOST/$BASE_NWO" \
     --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
     -q '"\(.mergeCommitAllowed) \(.squashMergeAllowed) \(.rebaseMergeAllowed)"' \
     > "$ALLOW" 2>/dev/null
@@ -277,7 +285,7 @@ fi
 # 우회되고, 로컬 재검증은 지워진 ref 를 재느라 **정상 실행이 매번 실패로 끝난다.**
 # 그러면 뒤따르는 위키 반영·티켓 정리도 멈춘다 (codex, PR #57).
 # 삭제는 전부 아래의 검증된 절차가 한다.
-bounded 60 gh pr merge "$PR" "$STRAT" --match-head-commit "$REVIEWED" \
+bounded 60 gh pr merge "$PR" -R "$API_HOST/$API_NWO" "$STRAT" --match-head-commit "$REVIEWED" \
     || die "머지 요청이 실패했다. 인증·권한·체크, 그리고 리뷰 뒤 push 가 있었는지 확인한다"
 
 # ── 머지가 **실제로** 끝났는지 본다 ─────────────────────────────
@@ -321,7 +329,10 @@ fi
 # 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
 # --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
 RLS=$(mktemp)
-bounded 30 git ls-remote --exit-code --heads "$HEAD_REMOTE" "$BR" > "$RLS" 2>/dev/null
+# 패턴을 **전체 ref** 로 준다. 짧은 이름은 ref 이름의 끝부분에도 맞아서,
+# 브랜치가 `x` 일 때 원격의 `feature/x` 까지 함께 잡힌다 — 뒤의 awk 가 첫 행을
+# 읽어 **엉뚱한 OID 를 이 브랜치의 것으로 오인한다** (codex, PR #61).
+bounded 30 git ls-remote --exit-code "$HEAD_REMOTE" "refs/heads/$BR" > "$RLS" 2>/dev/null
 case $? in
     0)  # 원격이 아직 그 커밋을 가리키는지 본다. 큐를 기다리는 20분 사이에
         # 누가 push 하거나 브랜치를 다시 만들었으면 **그 새 커밋이 날아간다** —

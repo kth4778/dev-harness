@@ -93,6 +93,16 @@ r 0 "$(feed $'"gh pr comment 58 --body \'@claude review 한국어로\'"')" \
 r 0 "$(feed $'"gh pr comment 58 -b \\"@codex review\\""')" \
    '-b 짧은 형태도 통과한다'
 
+echo "── 우회 시도 (PR #61 봇 지적) ──"
+# 탭을 공백으로 바꿔서 재면 `@codex<탭>review` 가 통과하는데, 셸과 gh 는 탭이
+# 든 본문을 그대로 보낸다 — 훅이 본 것과 전송되는 것이 갈린다.
+r 2 "$(feed $'"gh pr comment 61 --body \'@codex\\treview\'"')" \
+   '본문에 탭이 있으면 막는다'
+r 2 "$(feed $'"gh pr comment 61 --body \'@codex\\nreview\'"')" \
+   '본문에 개행이 있으면 막는다'
+r 0 "$(feed $'"gh pr comment 61 --body \'@codex review\'"')" \
+   '공백 하나인 정상 토큰은 통과한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

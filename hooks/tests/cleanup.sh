@@ -284,8 +284,37 @@ r 1 "$(grep -c 'remove-section' "$SCRIPT" || true)" \
 # PR 호스트는 PR 자신의 URL 에서 구해야 한다.
 # `GH_HOST=` 를 만드는 줄만 본다. BASE_REMOTE 폴백이 같은 설정을 읽는 것은
 # 정당하다 — 거기는 「어느 원격에서 당길까」를 고르는 자리다.
-r 1 "$(grep -c 'GH_HOST=$(url_host "$PR_URL")' "$SCRIPT" || true)" \
+# 이제 PR URL 에서 호스트를 한 번 뽑아(API_HOST) 그것을 재사용한다.
+r 1 "$(grep -c 'API_HOST=$(printf' "$SCRIPT" || true)" \
    'PR 호스트를 PR 자신의 URL 에서 구한다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'url_host "\$PR_URL"' || true)" \
+   '호스트를 두 번 뽑지 않는다'
+
+echo "── codex 지적 (PR #61) ──"
+# Enterprise 에 있는 PR 은 gh api 기본 호스트(github.com)로 조회하면 증거를
+# 못 봐서 **항상** 막힌다. 네 조회 전부에 호스트를 넘겨야 한다.
+r 4 "$(grep -c 'gh api --hostname' "$SCRIPT" || true)" \
+   'gh api 조회 전부에 PR 호스트를 넘긴다'
+
+# `claude[bot]` 은 파일명 패턴이기도 하다 — 인용 없이 확장하면 파일명으로 바뀐다.
+fresh
+git remote set-url --push origin "$R/me/work"
+: > claudeb; : > claudeo          # 패턴에 맞는 파일을 만든다
+out=$(run); rc=$?
+r 0 "$rc" '작업 폴더에 claudeb 같은 파일이 있어도 봇 로그인이 안 망가진다'
+rm -f claudeb claudeo
+
+# 짧은 이름은 ref 이름의 **끝부분**에도 맞는다 — 전체 ref 로 조회해야 한다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'ls-remote --exit-code --heads' || true)" \
+   'ls-remote 를 짧은 이름으로 조회하지 않는다'
+r 1 "$(grep -c 'refs/heads/\$BR" > "\$RLS"' "$SCRIPT" || true)" \
+   'ls-remote 에 전체 ref 를 넘긴다'
+
+# `https://host/me/work.git/` 같은 URL 도 me/work 로 모여야 한다.
+fresh
+git remote set-url --push origin "$R/me/work/"
+out=$(run); rc=$?
+r 0 "$rc" 'push URL 끝에 슬래시가 있어도 저장소를 같게 본다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
