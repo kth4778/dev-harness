@@ -24,6 +24,33 @@ ok()  { printf 'PASS — %s\n' "$1"; }
 # 원격이 있는지 본다. `git remote | grep -q` 로 쓰면 원격이 많을 때 파이프
 # 버퍼가 차고 grep 이 먼저 닫혀 SIGPIPE + pipefail 로 **있는데 없다고 나온다.**
 # 이 세션에서 같은 함정을 일곱 번 밟았다 — 파이프 뒤에는 -q 를 쓰지 않는다.
+# 진단에 URL 을 실을 때는 **자격 증명을 가린다.** `https://user:token@host/...`
+# 가 그대로 stderr 에 실리면 훅·시험·CI 로그에 토큰이 남는다 (codex, PR #66).
+# merge-cleanup 에는 앞 라운드에 넣고 여기를 빠뜨렸다.
+redact() {
+    printf '%s' "$1" | sed -E 's#(://)[^@/]*@#\1***@#'
+}
+# 호스트를 뽑는다. **프로토콜의 기본 포트는 뗀다** — `ssh://…:22/` 를 명시하는
+# 구성이 있는데 PR URL 쪽에는 포트가 없어, 같은 서버를 다른 서버로 판정한다
+# (codex, PR #66). 기본이 아닌 포트는 남긴다 — 사내 미러가 포트로만 갈리는
+# 경우를 여전히 가려야 한다. merge-cleanup 의 url_host 와 같은 규칙이다.
+host_of() {
+    local u="$1" h scheme
+    case "$u" in
+        *://*)  scheme=$(printf '%s' "$u" | sed -E 's#://.*$##' | tr '[:upper:]' '[:lower:]')
+                h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
+        *)      scheme=ssh
+                h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
+    esac
+    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+    case "$scheme:$h" in
+        ssh:*:22)    h=${h%:22} ;;
+        https:*:443) h=${h%:443} ;;
+        http:*:80)   h=${h%:80} ;;
+        git:*:9418)  h=${h%:9418} ;;
+    esac
+    printf '%s' "$h"
+}
 has_remote() { [ "$(git remote | grep -cx "$1" || true)" -gt 0 ]; }
 
 BR=$(git symbolic-ref -q --short HEAD) \
@@ -60,7 +87,8 @@ if has_remote "$HEAD_REMOTE"; then
       || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
     HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
       | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/+$##; s#\.git$##; s#/[^/]+$##; s#^.*/##')
-    [ -n "$HEAD_OWNER" ] || { bad "원격 URL 에서 소유자를 못 뽑았다: $HEAD_URL"; exit 1; }
+    [ -n "$HEAD_OWNER" ] \
+      || { bad "원격 URL 에서 소유자를 못 뽑았다: $(redact "$HEAD_URL")"; exit 1; }
 else
     printf '  (원격이 없다 — 재사용 검사를 건너뛴다)\n' >&2
 fi
@@ -123,7 +151,13 @@ if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     SKIP_PR="${PHASE6_PR:--1}"
     case "$SKIP_PR" in ''|*[!0-9-]*) SKIP_PR=-1 ;; esac
 
-    PRIOR=$(gh_out gh pr list --repo "$UPSTREAM" --state all --head "$BR" --limit 1000 \
+    # **호스트를 붙인다.** `--repo` 는 `[HOST/]OWNER/REPO` 를 받는데 이름만 주면
+    # api.github.com 으로 간다 — 사내 GitHub 에서는 조회가 실패해 **Phase 5 가
+    # 항상 막히거나**, GitHub.com 의 동명 저장소 이력을 보고 오판한다
+    # (codex, PR #66). merge-cleanup 은 앞 라운드에 고쳤고 여기를 빠뜨렸다.
+    UP_HOST=$(host_of "$UPSTREAM_URL")
+    PRIOR=$(gh_out gh pr list --repo "${UP_HOST:+$UP_HOST/}$UPSTREAM" \
+              --state all --head "$BR" --limit 1000 \
       --json number,state,headRepositoryOwner \
       -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
              == (\"$HEAD_OWNER\" | ascii_downcase))
@@ -160,14 +194,6 @@ nwo_of() {
 # 저장소가 아닌 **미러의 base 를 fetch** 한다 — 관계없는 merge-base 로 커밋을
 # 세거나 unrelated-history 로 Phase 5 가 막힌다 (codex, PR #63).
 # merge-cleanup 에는 앞 라운드에 넣었고 여기를 빠뜨렸다. 같은 실수가 두 번째다.
-host_of() {
-    local u="$1" h
-    case "$u" in
-        *://*)  h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
-        *)      h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
-    esac
-    printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
-}
 BASE_REMOTE=
 if [ -n "$UPSTREAM" ]; then
     want_up=$(printf '%s' "$UPSTREAM" | tr '[:upper:]' '[:lower:]')
@@ -284,6 +310,19 @@ while read -r sha subject; do
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
     del_only=$(git show --name-only --format= --diff-filter=D "$sha")
     del_test=$(printf '%s\n' "$del_only" | grep -cE "$TESTPAT" || true)
+    # 경로가 테스트로 안 보여도, **지워진 파일 안에 인라인 테스트가 들어 있었으면**
+    # 테스트를 함께 지운 것이다. `--diff-filter=d` 가 그 파일을 $files 에서 빼기
+    # 때문에 아래 순회가 닿지 못한다 — 구현과 테스트를 한 파일에 두는 언어에서
+    # 기능 파일째 걷어낸 정상 커밋이 「갈라진 커밋」으로 막혔다 (codex, PR #66).
+    if [ "$del_test" = 0 ]; then
+        while IFS= read -r df; do
+            [ -n "$df" ] || continue
+            n=$(git show "$sha^:$df" 2>/dev/null | grep -cE "$INLINE_TEST" || true)
+            [ "${n:-0}" -gt 0 ] && { del_test=1; break; }
+        done <<DELFILEEOF
+$del_only
+DELFILEEOF
+    fi
     del_src=$(printf '%s\n' "$del_only" | grep -vE "$TESTPAT" \
                 | grep -vE "$DOCPAT" | grep -c . || true)
     # 구현과 테스트를 함께 지운 커밋은 여기서 통과시킨다.

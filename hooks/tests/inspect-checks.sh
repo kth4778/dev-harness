@@ -404,6 +404,37 @@ printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat
 r 0 "$(GH_UPSTREAM=o/r out_of >/dev/null 2>&1; echo $?)" \
    'fork 가 아니면 원격 이름이 달라도 돈다'
 
+echo "── codex 지적 (PR #66) ──"
+# 구현과 인라인 테스트가 든 파일을 **통째로** 지운 커밋은 정상이다.
+fresh
+mkdir -p src
+{ printf 'fn gone()->i32{1}\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(gone(),1); } }\n'; } > src/gone.rs
+printf 'fn keep(){}\n' > src/keep.rs
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/dropfile
+git rm -q src/gone.rs
+git commit -qm "feat: 기능 파일을 통째로 걷어낸다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '인라인 테스트가 든 파일을 통째로 지운 커밋은 통과한다'
+
+# PR 이력 조회에 Enterprise 호스트를 붙인다.
+r 1 "$(grep -c 'UP_HOST=$(host_of' "$SCRIPT" || true)" \
+   'PR 이력 조회에 호스트를 붙인다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'pr list --repo "\$UPSTREAM"' || true)" \
+   '이름만으로 조회하지 않는다'
+
+# 진단에 자격 증명이 실리면 안 된다.
+r 1 "$(grep -c '^redact()' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
+
+# 기본 포트는 떼고 사내 포트는 구분한다. 함수만 뽑아 별도 파일로 읽힌다 —
+# 중첩 heredoc 안에서는 바깥 변수가 안 넘어간다.
+FN=$(mktemp); sed -n '/^host_of()/,/^}/p' "$SCRIPT" > "$FN"
+r "github.com"      "$(. "$FN"; host_of ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
+r "github.com"      "$(. "$FN"; host_of https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
+r "git.ex.com:8443" "$(. "$FN"; host_of https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
+rm -f "$FN"
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

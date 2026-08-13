@@ -417,6 +417,24 @@ r 1 "$(grep -c '^redact()' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있�
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'die "원격 $u' || true)" \
    '원본 URL 을 그대로 진단에 싣지 않는다'
 
+echo "── codex 지적 (PR #66) ──"
+# 같은 원격이 두 번 등록돼 있으면 한 번만 지워야 한다. 두 번 지우면 두 번째가
+# 실패해 **원격은 지워졌는데 로컬은 남는** 부분 정리가 된다.
+fresh
+git remote set-url --push origin "$R/me/work"
+git remote set-url --add --push origin "$R/me/work"   # 같은 URL 을 또 넣는다
+out=$(run); rc=$?
+r 0 "$rc" '같은 push URL 이 두 번 있어도 정상 경로가 돈다'
+r "" "$(git branch --list feature/x)" '로컬까지 정리됐다'
+
+# 기본 포트는 떼고 사내 포트는 구분한다. 함수만 뽑아 별도 파일로 읽힌다 —
+# 중첩 heredoc 안에서는 바깥 변수가 안 넘어간다.
+FN=$(mktemp); sed -n '/^url_host()/,/^}/p' "$SCRIPT" > "$FN"
+r "github.com"      "$(. "$FN"; url_host ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
+r "github.com"      "$(. "$FN"; url_host https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
+r "git.ex.com:8443" "$(. "$FN"; url_host https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
+rm -f "$FN"
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

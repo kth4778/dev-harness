@@ -203,14 +203,27 @@ url_nwo() {
 # **포트까지 남긴다.** 사내 미러가 `host:8443` 과 `host:9443` 처럼 포트로만
 # 갈리면, 포트를 버린 비교는 둘을 같은 서버로 본다 (codex, PR #59).
 url_host() {
-    local u="$1" h
+    local u="$1" h scheme
     case "$u" in
         *://*)  # scheme 이 있으면 `:` 뒤는 포트다 — 남긴다
+            scheme=$(printf '%s' "$u" | sed -E 's#://.*$##' | tr '[:upper:]' '[:lower:]')
             h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
         *)      # scp 형태(host:path) — `:` 뒤는 경로다. 포트를 쓸 수 없다
+            scheme=ssh
             h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
     esac
-    printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+    # **프로토콜의 기본 포트는 뗀다.** `ssh://git@github.com:22/…` 를 명시하는
+    # 구성이 있는데, PR URL 쪽은 포트가 없어 **같은 서버를 다른 서버로 판정**해
+    # 머지 전에 막혔다 (codex, PR #66). 기본이 아닌 포트는 그대로 둔다 —
+    # 사내 미러가 포트로만 갈리는 경우를 여전히 가려야 한다.
+    case "$scheme:$h" in
+        ssh:*:22)    h=${h%:22} ;;
+        https:*:443) h=${h%:443} ;;
+        http:*:80)   h=${h%:80} ;;
+        git:*:9418)  h=${h%:9418} ;;
+    esac
+    printf '%s' "$h"
 }
 MY_NWO=$(url_nwo "$HEAD_URL")
 MY_HOST=$(url_host "$HEAD_URL")
@@ -402,6 +415,7 @@ NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
 # `--exit-code` 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
 # 짧은 이름은 ref 끝부분에도 맞으므로 **전체 ref** 로 조회한다 (PR #61).
 DEL_URLS=
+SEEN_KEYS="|"
 while IFS= read -r u; do
     [ -n "$u" ] || continue
     RLS=$(mktemp)
@@ -412,8 +426,22 @@ while IFS= read -r u; do
             [ "$ROID" = "$REVIEWED" ] \
                 || die "원격 $(redact "$u") 의 $BR 이 ${ROID:0:8} 를 가리킨다(리뷰된 것은 ${REVIEWED:0:8}).
        머지 뒤에 누가 push 했다 — 그 커밋을 지우지 않는다. 눈으로 확인한다"
-            DEL_URLS="$DEL_URLS$u
+            # 같은 엔드포인트가 두 번 등록됐거나 SSH·HTTPS 별칭이 한 저장소를
+            # 가리키면 목록에 중복이 든다. 그대로 두면 두 번째 삭제가
+            # `remote ref does not exist` 로 실패해, **원격은 지워졌는데 로컬
+            # 삭제에 못 가는 부분 정리**가 된다 (codex, PR #66).
+            # 정규화한 키로 한 번만 담는다.
+            # 호스트가 있으면 `host/owner/repo` 로 묶는다 — SSH·HTTPS 별칭이
+            # 같은 저장소를 가리키는 경우를 하나로 본다. 호스트가 없으면
+            # (로컬 경로 원격) 경로 자체가 저장소를 가른다.
+            khost=$(url_host "$u")
+            if [ -n "$khost" ]; then key="$khost/$(url_nwo "$u")"; else key="$u"; fi
+            case "$SEEN_KEYS" in
+                *"|$key|"*) : ;;
+                *) SEEN_KEYS="$SEEN_KEYS$key|"
+                   DEL_URLS="$DEL_URLS$u
 " ;;
+            esac ;;
         2)  rm -f "$RLS"
             printf '  %s 에는 이미 없다\n' "$(redact "$u")" >&2 ;;
         *)  rm -f "$RLS"
