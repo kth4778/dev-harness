@@ -226,6 +226,41 @@ printf '# 설명\n'                    > README.md
 git add .; git commit -qm "test: 단언을 채우고 설명을 적는다"
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" '테스트+문서만 바뀐 커밋을 통과시키지 않는다'
 
+echo "── codex 지적 (PR #59) ──"
+# 테스트만 지운 커밋이 「건드린 게 없다」로 건너뛰어지면 안 된다.
+fresh; git switch -qc feature/deleteonly
+mkdir -p src tests
+printf 'def f(): pass\n'      > src/app.py
+printf 'def test_f(): pass\n' > tests/test_app.py
+git add .; git commit -qm "feat: 처음"
+git rm -q tests/test_app.py; git commit -qm "test: 테스트만 지운다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '삭제만 있는 커밋도 분류한다'
+
+# 옛 테스트가 파일에 남아 있다는 이유만으로 구현 커밋이 통과하면 안 된다.
+fresh; git switch -qc feature/staletest
+mkdir -p src
+printf 'fn f()->i32{1}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } }\n' > src/lib.rs
+git add .; git commit -qm "feat: 처음"
+printf 'fn f()->i32{2}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } }\n' > src/lib.rs
+git add .; git commit -qm "feat: 구현만 고친다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '옛 테스트가 남아 있어도 구현만 고치면 걸린다'
+
+# 반대 갈래 — 같은 커밋에서 단언도 고쳤으면 통과해야 한다.
+fresh; git switch -qc feature/bothchanged
+mkdir -p src
+printf 'fn f()->i32{1}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(f(),1); } }\n' > src/lib.rs
+git add .; git commit -qm "feat: 처음"
+printf 'fn f()->i32{2}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(f(),2); } }\n' > src/lib.rs
+git add .; git commit -qm "feat: 구현과 단언을 함께 고친다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 단언을 함께 고치면 통과한다'
+
+# 이름이 문서 토큰으로 시작하는 운영 소스를 문서로 보면 안 된다.
+fresh; git switch -qc feature/licensemgr
+mkdir -p src
+printf 'class LICENSEManager {}\n' > src/LICENSEManager.java
+git add .; git commit -qm "feat: 라이선스 관리자를 넣는다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'LICENSEManager.java 를 문서로 보지 않는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

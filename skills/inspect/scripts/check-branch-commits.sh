@@ -175,12 +175,17 @@ SPLIT=$(mktemp)
 # 문서·설정만 바뀐 커밋
 # `.txt` 는 빼 둔다 — 문서일 수도 데이터·소스일 수도 있어서 예외로 두면
 # 실제 구현 커밋이 조용히 통과한다.
-DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)'
+# `LICENSE|CHANGELOG|NOTICE` 뒤에 경계가 없어 `src/LICENSEManager.java` 같은
+# 운영 소스가 문서로 분류됐다 — 그런 파일만 고친 커밋은 검사를 통째로
+# 건너뛴다 (codex, PR #59). 토큰 뒤를 파일 끝이나 짧은 꼬리로 못박는다.
+DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)([._-][A-Za-z0-9]+)?$'
 # 파일 안에 테스트가 함께 있는 관례 — Rust `#[cfg(test)]`, Go `func Test`,
 # Java `@Test`, pytest `def test_`, JS `describe(`/`it(`.
 # `it\(` 에 경계가 없으면 `exit(`·`commit(`·`submit(` 에 걸려 **구현만 있는
 # 커밋이 통과한다** (claude, PR #55). 줄 시작이나 비단어 뒤로 못박는다.
 INLINE_TEST='#\[cfg\(test\)\]|func Test[A-Z]|@Test|def test_|(^|[^A-Za-z0-9_.])(describe|it|test)\('
+# 단언 키워드. 「테스트 영역을 이번에 건드렸나」를 재는 데 쓴다.
+ASSERTPAT='assert|EXPECT_|expect\(|\.(to(Be|Equal|Throw)|should)\b|should[A-Z_(]|verify\(|assertThat'
 
 while read -r sha subject; do
     # 커밋이 0개면 heredoc 에 개행 하나가 남아 이 루프가 **한 번 돈다.**
@@ -189,10 +194,16 @@ while read -r sha subject; do
     [ -n "$sha" ] || continue
     case "$subject" in refactor:*|refactor\(*|chore:*|chore\(*) continue ;; esac
 
-    # `--diff-filter=d` — 삭제된 경로를 뺀다. 안 빼면 유일한 테스트 파일을
-    # **지운** 커밋이 「테스트가 함께 있다」로 통과한다 (codex, PR #58).
+    # 두 벌로 나눈다.
+    #  - files_all : 삭제 포함. 「이 커밋이 무엇을 건드렸나」를 분류할 때 쓴다
+    #  - files     : 삭제 제외. 「테스트가 함께 있다」는 **증거**로 쓴다
+    #
+    # 한 벌로 두면 둘 중 하나가 깨진다. 삭제를 포함하면 유일한 테스트를 **지운**
+    # 커밋이 「테스트가 있다」로 통과하고(PR #58), 삭제를 빼면 테스트만 지운
+    # 커밋이 빈 목록이 되어 **검사를 통째로 건너뛴다**(PR #59). 둘 다 codex 다.
+    files_all=$(git show --name-only --format= "$sha")
     files=$(git show --name-only --format= --diff-filter=d "$sha")
-    [ -n "$files" ] || continue
+    [ -n "$files_all" ] || continue
 
     # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나
     # `fix: 잘못된 설명을 고친다` 가 빠져 README 하나 고친 커밋이 FAIL 이 됐다.
@@ -201,13 +212,13 @@ while read -r sha subject; do
     # 닫히고 앞쪽이 SIGPIPE 로 죽어, pipefail 이 141 을 돌려준다 —
     # `|| continue` 가 그것을 「문서뿐」으로 읽어 **소스 커밋이 검사를 건너뛴다.**
     # 이 세션에서 같은 함정을 일곱 번째 밟았다. 스트림을 끝까지 읽는다.
-    nondoc=$(printf '%s\n' "$files" | grep -vE "$DOCPAT" | grep -c . || true)
+    nondoc=$(printf '%s\n' "$files_all" | grep -vE "$DOCPAT" | grep -c . || true)
     [ "$nondoc" -gt 0 ] || continue
 
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
     # 구현 수에서 **문서를 뺀다.** 안 빼면 테스트와 README 만 고친 커밋이
     # 「구현도 있다」로 읽혀 그대로 통과한다 (codex, PR #58).
-    has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" \
+    has_src=$(printf '%s\n' "$files_all" | grep -vE "$TESTPAT" \
                 | grep -vE "$DOCPAT" | grep -c . || true)
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
 
@@ -218,11 +229,17 @@ while read -r sha subject; do
     # 안 걸린다.** 이 세션에서 같은 실수를 여섯 번째 한다.
     #
     # 표식이 **새로 추가된 줄**에만 있으면 기존 테스트의 단언을 고친 커밋이 걸린다.
-    # 그래서 바뀐 파일이 이미 테스트를 품고 있는지도 본다.
+    #
+    # 그렇다고 「파일이 테스트를 품고 있다」만 보면 반대로 뚫린다 — 구현만 고쳐도
+    # 옛 `#[cfg(test)]` 가 파일에 남아 있어 통과했다 (codex, PR #59).
+    # **이번 커밋에서 테스트 영역도 실제로 바뀌었는지**를 함께 본다.
     # (`grep -q` 를 쓰지 않는다 — 위와 같은 이유다.)
     if [ "$has_test" = 0 ]; then
         added_test=$(git show --format= -U0 "$sha" | grep '^+' \
                        | grep -cE "$INLINE_TEST" || true)
+        # 바뀐 줄(+/-)에 단언이 있으면 테스트를 건드린 것이다.
+        touched_test=$(git show --format= -U0 "$sha" | grep -E '^[+-]' \
+                         | grep -cE "$ASSERTPAT" || true)
         holds_test=0
         while IFS= read -r f; do
             [ -n "$f" ] || continue
@@ -231,7 +248,11 @@ while read -r sha subject; do
         done <<FILEEOF
 $files
 FILEEOF
-        if [ "$added_test" -gt 0 ] || [ "$holds_test" = 1 ]; then continue; fi
+        # 새 테스트를 넣었거나, 테스트를 품은 파일에서 단언을 건드렸으면 통과.
+        if [ "$added_test" -gt 0 ] \
+           || { [ "$holds_test" = 1 ] && [ "$touched_test" -gt 0 ]; }; then
+            continue
+        fi
     fi
 
     printf '  갈라진 커밋: %s %s\n' "${sha:0:8}" "$subject" >> "$SPLIT"

@@ -16,12 +16,16 @@ bounded() {
     local secs="$1"; shift
     local pid n=0
     "$@" & pid=$!
-    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$secs" ]; do sleep 1; n=$((n+1)); done
+    # 1 초 간격으로 재면 즉시 끝나는 명령도 **매번 1 초를 버린다.** 정리 한 번에
+    # 이 함수를 여러 번 부르고 시험은 스크립트를 반복 실행하므로, 시험 전체가
+    # 몇 분 멈춘 것처럼 보였다 (codex, PR #59). 0.05 초로 잰다.
+    local limit=$(( secs * 20 ))
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$limit" ]; do sleep 0.05; n=$((n+1)); done
     if kill -0 "$pid" 2>/dev/null; then
         # TERM 을 무시하는 프로세스가 있다. 유예를 준 뒤 KILL 로 올린다 —
         # 안 그러면 뒤의 wait 가 시한 없이 붙잡혀 이 함수가 무의미해진다.
         kill -TERM "$pid" 2>/dev/null
-        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 5 ]; do sleep 1; n=$((n+1)); done
+        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.05; n=$((n+1)); done
         kill -KILL "$pid" 2>/dev/null
         wait "$pid" 2>/dev/null
         return 124                       # 시한 초과
@@ -46,6 +50,17 @@ die() { printf '차단됨 — %s\n' "$1" >&2; exit 1; }
 # 브랜치를 원격까지 지운다.** 지우기 전에 반드시 대조한다.
 BR=$(git rev-parse --abbrev-ref HEAD)
 PR_HEAD=$(gh_json headRefName .headRefName) || die "PR #$PR 을 못 읽었다"
+
+# `gh api` 의 `{owner}/{repo}` 는 **현재 폴더**의 저장소로 치환된다. fork 에서
+# upstream 의 PR 을 다루면 fork 쪽의 같은 번호를 조회해 **봇 증거를 통째로
+# 놓치거나 404 로 막힌다** (codex, PR #59). `gh pr view` 는 fork 를 감지해
+# upstream 을 보므로, 그 URL 로 저장소를 확정하고 이후 API 를 전부 묶는다.
+PR_URL=$(gh_json url .url) || die "PR #$PR 의 URL 을 못 읽었다"
+API_NWO=$(printf '%s' "$PR_URL" | sed -E 's#^[a-z]+://[^/]+/##; s#/pull/[0-9]+.*$##')
+case "$API_NWO" in
+    */*) : ;;
+    *)   die "PR URL 에서 저장소를 못 뽑았다: $PR_URL" ;;
+esac
 [ "$PR_HEAD" = "$BR" ] || die "PR #$PR 의 head 는 '$PR_HEAD' 인데 지금은 '$BR' 에 있다"
 
 # base 도 PR 에서 가져온다. origin/HEAD 를 믿으면 develop 을 쓰는 저장소에서
@@ -86,17 +101,20 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
 # 증거면 그 커밋을 보고 남긴 것이다.
 # 봇 로그인은 **정확히** 대조한다. `contains("claude")` 로 보면
 # `claude-review-helper` 같은 아무 계정이 리뷰 하나 남겨 통과시킬 수 있다.
-BOTS="${REQUIRED_BOTS:-chatgpt-codex-connector[bot] claude[bot]}"
+# **환경변수로 바꾸지 못하게 고정한다.** 규칙 7 은 봇 딱 2 개를 요구하는데
+# 목록을 밖에서 넘길 수 있으면 그 규칙이 무의미해진다 — `REQUIRED_BOTS=' '`
+# 하나로 리뷰 증거가 전혀 없는 PR 이 머지 단계로 넘어갔다 (codex, PR #59).
+BOTS="chatgpt-codex-connector[bot] claude[bot]"
 
 # SHA 있는 증거(리뷰·인라인 코멘트)만 자동으로 받는다.
 seen_bot_sha() {                   # $1 = 정확한 로그인
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" \
+    bounded 30 gh api --paginate "repos/$API_NWO/pulls/$PR/reviews" \
         -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
     grep -qx "$PR_OID" "$f" && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --paginate "repos/{owner}/{repo}/pulls/$PR/comments" \
+        bounded 30 gh api --paginate "repos/$API_NWO/pulls/$PR/comments" \
             -q ".[] | select(.user.login == \"$bot\") | .commit_id" > "$f" 2>/dev/null
         grep -qx "$PR_OID" "$f" && rc=0
     fi
@@ -112,11 +130,11 @@ seen_bot_sha() {                   # $1 = 정확한 로그인
 seen_bot_shaless() {
     local bot="$1" f rc=1
     f=$(mktemp)
-    bounded 30 gh api --paginate "repos/{owner}/{repo}/issues/$PR/comments" \
+    bounded 30 gh api --paginate "repos/$API_NWO/issues/$PR/comments" \
         -q ".[] | select(.user.login == \"$bot\") | .id" > "$f" 2>/dev/null
     [ -s "$f" ] && rc=0
     if [ "$rc" != 0 ]; then
-        bounded 30 gh api --paginate "repos/{owner}/{repo}/issues/$PR/reactions" \
+        bounded 30 gh api --paginate "repos/$API_NWO/issues/$PR/reactions" \
             -q ".[] | select(.user.login == \"$bot\" and .content == \"+1\") | .id" \
             > "$f" 2>/dev/null
         [ -s "$f" ] && rc=0
@@ -163,10 +181,17 @@ url_nwo() {
 # 호스트도 본다. `owner/repo` 만 맞추면 github.com 과 사내 GitLab 미러가
 # 같아 보여, GitHub PR 을 머지하고 **다른 서버의 동명 브랜치를 지운다**
 # (codex, PR #56).
+# **포트까지 남긴다.** 사내 미러가 `host:8443` 과 `host:9443` 처럼 포트로만
+# 갈리면, 포트를 버린 비교는 둘을 같은 서버로 본다 (codex, PR #59).
 url_host() {
-    printf '%s' "$1" \
-      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#[:/].*$##' \
-      | tr '[:upper:]' '[:lower:]'
+    local u="$1" h
+    case "$u" in
+        *://*)  # scheme 이 있으면 `:` 뒤는 포트다 — 남긴다
+            h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
+        *)      # scp 형태(host:path) — `:` 뒤는 경로다. 포트를 쓸 수 없다
+            h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
+    esac
+    printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
 }
 MY_NWO=$(url_nwo "$HEAD_URL")
 MY_HOST=$(url_host "$HEAD_URL")
@@ -186,17 +211,23 @@ GH_HOST=$(url_host "${GH_HOST:-github.com}")
 # 다른 gh 호출과 마찬가지로 실패를 확인한다. 여기만 안 보면 조회 실패가
 # 「base 저장소를 모른다」로 보여 아래에서 로컬 설정으로 떨어진다
 # (claude, PR #55).
-BASE_NWO=$(bounded 30 gh api "repos/{owner}/{repo}/pulls/$PR" \
-    -q '.base.repo.full_name' 2>/dev/null) \
-    || die "PR #$PR 의 base 저장소를 못 읽었다(네트워크·인증). 정리하지 않는다"
+# PR 은 base 저장소에 산다 — 위에서 URL 로 확정한 것이 곧 base 다.
+# API 를 한 번 더 부르지 않는다.
+BASE_NWO="$API_NWO"
 # 부분문자열로 찾으면 `me/work` 가 `me/work-backup` 원격에 들어맞아 **엉뚱한
 # 저장소에서 통합 브랜치를 당긴다.** head 쪽과 같은 정규화로 정확히 비교한다.
 BASE_REMOTE=
 if [ -n "$BASE_NWO" ]; then
     want=$(printf '%s' "$BASE_NWO" | tr '[:upper:]' '[:lower:]')
+    # 호스트도 본다. `owner/repo` 만 맞추면 알파벳상 앞선 사내 미러가 먼저
+    # 잡혀, GitHub PR 을 머지하고 **미러의 base 를 당긴다** — 로컬 base 에 방금
+    # 머지한 변경이 없는 채로 다음 작업이 시작된다 (codex, PR #59).
+    # head 와 base 는 같은 서버의 저장소이므로 MY_HOST 와 대조하면 된다.
     for rmt in $(git remote); do
-        [ "$(url_nwo "$(git remote get-url "$rmt" 2>/dev/null)")" = "$want" ] \
-            && { BASE_REMOTE="$rmt"; break; }
+        u=$(git remote get-url "$rmt" 2>/dev/null) || continue
+        [ "$(url_nwo "$u")"  = "$want" ]     || continue
+        [ "$(url_host "$u")" = "$MY_HOST" ]  || continue
+        BASE_REMOTE="$rmt"; break
     done
 fi
 if [ -z "$BASE_REMOTE" ]; then
@@ -309,6 +340,14 @@ NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
 # 는 현재 값을 안 보고 지우므로 그 틈이 남는다. `update-ref -d <ref> <옛값>` 은
 # 옛값과 다르면 거부한다 — 대조와 삭제가 한 동작이 된다 (codex, PR #58).
 # 두 갈래를 실측했다: 옛값→종료 1·브랜치 유지, 맞는 값→종료 0·삭제.
+# `git branch -D` 는 다른 worktree 가 체크아웃한 브랜치를 거부한다. 원자성을
+# 얻으려고 `update-ref -d` 로 바꾸면서 **그 보호를 잃었다** — 지우면 그
+# worktree 가 unborn 상태가 되어 커밋 참조를 잃는다 (codex, PR #59).
+# 직접 확인한다. (`grep -c` 를 쓴다 — `-q` 는 파이프에서 SIGPIPE 를 부른다.)
+if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || true)" -gt 0 ]; then
+    die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
+fi
+
 if ! git update-ref -d "refs/heads/$BR" "$REVIEWED" 2>/dev/null; then
     # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —
     # 그대로 「정리 완료」를 찍으면 그 브랜치가 재사용 대상으로 남는다.

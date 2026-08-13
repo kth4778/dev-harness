@@ -67,6 +67,9 @@ esac
 case "$2" in
   view)
     case "$*" in
+      # 스크립트는 이 URL 로 base 저장소를 확정한다(fork 에서 fork 를
+      # 조회하지 않게). `pull/<번호>` 앞이 곧 owner/repo 다.
+      *' url'*|*'.url'*)      printf 'https://github.com/%s/pull/1\n' "${GH_NWO:-me/work}" ;;
       *headRefName*)          printf '%s\n' "${GH_HEAD:-feature/x}" ;;
       *baseRefName*)          printf '%s\n' "${GH_BASE:-main}" ;;
       *headRefOid*)           printf '%s\n' "${GH_OID}" ;;
@@ -76,7 +79,6 @@ case "$2" in
     esac
     exit "${GH_VIEW_RC:-0}" ;;
   merge)
-    [ "${GH_DELETE_REJECT:-0}" = "1" ] && printf '%s\n' "$*" | grep -q -- --delete-branch && exit 1
     exit "${GH_MERGE_RC:-0}" ;;
 esac
 GH
@@ -136,9 +138,11 @@ fresh; out=$(GH_MERGE_RC=1 run); rc=$?
 r 1 "$rc" '머지 요청이 실패하면 멈춘다'
 printf '%s' "$out" | grep -q "리뷰 뒤 push" && r y y '리뷰 후 push 가능성을 알린다' || r y n '리뷰 후 push 가능성을 알린다'
 
-echo "── merge queue 우회 ──"
-fresh; out=$(GH_DELETE_REJECT=1 run); rc=$?
-r 0 "$rc" '--delete-branch 가 거부돼도 플래그 없이 넣고 정리한다'
+echo "── merge queue ──"
+# 이제 그 플래그를 아예 안 넘기므로 queue 저장소에서도 갈래가 하나뿐이다.
+# 머지 뒤 상태가 MERGED 가 되면 정리까지 간다.
+fresh; out=$(run); rc=$?
+r 0 "$rc" 'queue 저장소에서도 한 갈래로 머지하고 정리한다'
 r "" "$(git branch --list feature/x)" '정리가 끝났다'
 
 echo "── 원격에 이미 없을 때 ──"
@@ -240,6 +244,25 @@ r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'git branch -D' || true)" \
    '로컬 삭제에 git branch -D 를 쓰지 않는다'
 r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'update-ref -d' || true)" \
    '로컬 삭제를 리뷰된 SHA 에 원자적으로 묶는다'
+
+echo "── codex 지적 (PR #59) ──"
+# 규칙 7 은 봇 딱 2개를 요구한다 — 환경변수로 그 목록을 바꿀 수 있으면 안 된다.
+fresh
+git remote set-url --push origin "$R/me/work"
+# 예전에는 이 값이 빈칸이면 루프가 한 번도 안 돌아 **리뷰 증거 없이** 통과했다.
+# 이제 무시하므로 정상 목록으로 검사하고, 증거가 있으니 정상 통과한다.
+out=$(REQUIRED_BOTS=" " run); rc=$?
+r 0 "$rc" 'REQUIRED_BOTS 를 넘겨도 정상 목록으로 검사한다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'REQUIRED_BOTS' || true)" \
+   '스크립트가 REQUIRED_BOTS 를 읽지 않는다'
+
+# 다른 worktree 가 체크아웃한 브랜치는 지우지 않는다.
+r 1 "$(grep -c 'git worktree list' "$SCRIPT" || true)" \
+   '삭제 전에 worktree 사용 여부를 본다'
+
+# 빠른 명령마다 1초를 버리면 안 된다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'sleep 1;' || true)" \
+   'bounded 가 1초 단위로 폴링하지 않는다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
