@@ -91,10 +91,19 @@ is_bot_trigger() {
 # 막아 두니 PR을 올린 뒤 설명의 오타 하나도 고칠 수 없었다. 2026-08-11에
 # 실물로 겪었다: 본문의 백틱이 셸에 먹혀 첫 줄이 깨졌는데 되돌릴 방법이 없었다.
 # 거짓 차단은 사람이 훅을 끄게 만든다 (RULES.md 「훅을 고칠 때」절).
-case "$flat" in
+# **공백을 고른 뒤 서브커맨드를 찾는다.** 낱말 사이에 탭이나 공백 두 개를 넣으면
+# 셸에서는 똑같이 동작하는데 `*"gh pr comment"*` 에는 안 맞아, 판정 함수까지
+# 도달조차 못 했다 — `gh<탭>pr<탭>comment 61 --body '사람 리뷰'` 가 통과했다
+# (codex, PR #71 이 재현). 붙임표 없는 낱말 경계는 전부 한 칸으로 만든다.
+norm=$(printf '%s' "$flat" | tr '\t' ' ' | tr -s ' ')
+
+case "$norm" in
     *"gh pr review"*)      deny "gh pr review" ;;
     *"gh issue comment"*)  deny "gh issue comment" ;;
     *"gh pr comment"*)
+        # 판정에는 **원문**을 쓴다(is_bot_trigger 가 $cmd·$flat 를 본다).
+        # 정규화한 문자열로 허용하면 탭이 든 본문이 통과한다 — PR #61 에서
+        # 같은 이유로 뚫렸다.
         if ! is_bot_trigger; then
             deny "gh pr comment (봇 호출 토큰 외의 본문)"
         fi
@@ -103,12 +112,18 @@ esac
 
 # gh api로 우회하는 경로 — POST로 리뷰·코멘트를 만드는 호출만 막는다.
 # 조회(GET)는 봇 리뷰를 읽어야 하므로 허용한다.
-case "$flat" in
+case "$norm" in
     *"gh api"*)
-        case "$flat" in
+        case "$norm" in
             *"/reviews"*|*"/comments"*)
-                case "$flat" in
-                    *"-X POST"*|*"--method POST"*|*"-f "*|*"--field"*|*"--input"*)
+                # **필드 플래그를 전부 잡는다.** `-f `·`--field` 만 보다가
+                # 표준 단축형 `-F`(--field 의 별칭), `--raw-field`, 붙여 쓴
+                # `-fbody=x` 를 놓쳤다 — `gh api … -F body='사람 리뷰'` 로
+                # 실제 코멘트가 만들어졌다 (codex, PR #71 이 재현).
+                # 필드가 하나라도 붙으면 gh 는 기본 메서드를 POST 로 바꾼다.
+                case "$norm" in
+                    *"-X POST"*|*"--method POST"*|*"--input"* \
+                    |*" -f"*|*" -F"*|*"--field"*|*"--raw-field"*)
                         deny "gh api로 리뷰·코멘트 생성"
                         ;;
                 esac

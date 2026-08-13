@@ -512,6 +512,19 @@ printf 'def test_orphan(): pass\n' > tests/test_orphan.py
 git add .; git commit -qm "test: 짝을 지우고 딴 테스트를 더한다"
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" '짝을 지우면서 딴 테스트만 더한 커밋을 잡는다'
 
+echo "── codex 지적 (PR #71) ──"
+# 확장자 없는 README 만 더한 커밋은 문서 커밋이다.
+fresh; git switch -qc feature/plainreadme
+printf '설명\n' > README
+git add .; git commit -qm "docs: 설명을 적는다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '확장자 없는 README 를 문서로 본다'
+
+# 이름이 문서 토큰으로 시작하는 소스는 여전히 소스다.
+fresh; git switch -qc feature/readmeparser
+mkdir -p src; printf 'class READMEParser {}\n' > src/READMEParser.java
+git add .; git commit -qm "feat: 파서를 넣는다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'READMEParser.java 는 소스로 본다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

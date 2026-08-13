@@ -110,6 +110,29 @@ r 2 "$(feed $'"gh pr comment 62 --body \'@codex review\'\\r"')" \
 r 2 "$(feed $'"gh pr comment 62 --body \'@codex\\rreview\'"')" \
    '본문 안의 캐리지 리턴도 막는다'
 
+echo "── 우회 시도 (PR #71 봇 지적) ──"
+# 낱말 사이에 탭·이중 공백을 넣으면 디스패처가 못 알아봤다. 셸에서는 정상 호출이다.
+r 2 "$(feed '"gh\tpr\tcomment 71 --body 사람리뷰"')" \
+   '탭으로 구분한 코멘트 명령도 막는다'
+r 2 "$(feed $'"gh  pr  comment 71 --body \'사람 리뷰\'"')" \
+   '공백 두 개로 구분해도 막는다'
+r 2 "$(feed '"gh\tpr\treview 71 --approve"')" \
+   '탭으로 구분한 리뷰 명령도 막는다'
+
+# gh api 의 필드 플래그를 전부 잡는다. 하나라도 붙으면 gh 는 POST 로 바꾼다.
+r 2 "$(feed $'"gh api repos/o/r/issues/1/comments -F body=x"')" \
+   '-F 로 만드는 코멘트를 막는다'
+r 2 "$(feed $'"gh api repos/o/r/issues/1/comments --raw-field body=x"')" \
+   '--raw-field 도 막는다'
+r 2 "$(feed $'"gh api repos/o/r/pulls/1/reviews -fbody=x"')" \
+   '붙여 쓴 -fbody= 도 막는다'
+
+# 조회(GET)는 여전히 통과해야 한다 — 봇 리뷰를 읽어야 한다.
+r 0 "$(feed $'"gh api repos/o/r/pulls/1/reviews --paginate"')" \
+   '리뷰 조회는 통과한다'
+r 0 "$(feed $'"gh api --hostname github.com repos/o/r/issues/1/comments"')" \
+   '코멘트 조회도 통과한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

@@ -297,7 +297,9 @@ COLOCATED=$(mktemp)
 # `doc/` 를 경로 **어디서나** 받으면 `src/doc/parser.py` 만 넣은 구현 커밋이
 # 문서로 분류돼 검사를 통째로 건너뛴다. `doc` 은 흔한 운영 패키지 이름이다
 # (codex, PR #62). 저장소 최상위의 문서 디렉터리로 한정한다.
-DOCPAT='\.(md|markdown|rst|adoc)$|^(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)([._-][A-Za-z0-9]+)?$'
+# 확장자 없는 `README`·`AUTHORS` 도 문서다. 안 넣으면 그것만 더한 커밋이
+# 「구현만」으로 걸려 Phase 5 가 막힌다 (codex, PR #71 이 재현).
+DOCPAT='\.(md|markdown|rst|adoc)$|^(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE|README|AUTHORS|CONTRIBUTING)([._-][A-Za-z0-9]+)?$'
 # 파일 안에 테스트가 함께 있는 관례 — Rust `#[cfg(test)]`, Go `func Test`,
 # Java `@Test`, pytest `def test_`, JS `describe(`/`it(`.
 # `it\(` 에 경계가 없으면 `exit(`·`commit(`·`submit(` 에 걸려 **구현만 있는
