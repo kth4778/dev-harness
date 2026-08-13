@@ -497,6 +497,21 @@ git switch -q feature/withmerge
 git merge -q --no-ff side/impl -m "merge: side 를 들인다" 2>/dev/null
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'merge 커밋으로 들여온 구현만 있는 변경도 잡는다'
 
+echo "── codex 지적 (PR #70) ──"
+# 구현·테스트 짝을 지우면서 **딴 테스트만** 하나 더한 커밋은 갈라진 테스트 커밋이다.
+fresh
+mkdir -p src tests
+printf 'def a(): pass\n'      > src/a.py
+printf 'def test_a(): pass\n' > tests/test_a.py
+git add .; git commit -qm base; git push -q origin main 2>/dev/null
+git switch -qc feature/orphantest
+git rm -q src/a.py tests/test_a.py
+# `git rm` 이 빈 tests/ 를 지운다 — 다시 만들어야 파일을 넣을 수 있다.
+mkdir -p tests
+printf 'def test_orphan(): pass\n' > tests/test_orphan.py
+git add .; git commit -qm "test: 짝을 지우고 딴 테스트를 더한다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '짝을 지우면서 딴 테스트만 더한 커밋을 잡는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

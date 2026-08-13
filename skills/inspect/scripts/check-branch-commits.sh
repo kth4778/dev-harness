@@ -377,7 +377,11 @@ DELFILEEOF
         has_src=$(( has_src - del_src ))
         [ "$has_src" -lt 0 ] && has_src=0
         # 남은 것이 없으면 이 커밋은 「함께 지운」 것이 전부다.
-        [ "$has_src" -eq 0 ] && continue
+        #
+        # **구현과 테스트 양쪽이 다 비었을 때만** 넘긴다. has_src 만 보면,
+        # 짝을 지우면서 딴 테스트만 하나 더한 커밋이 통과했다 — 그건 갈라진
+        # 테스트 커밋이다 (codex, PR #70 이 재현).
+        [ "$has_src" -eq 0 ] && [ "$has_test" -eq 0 ] && continue
     fi
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
 

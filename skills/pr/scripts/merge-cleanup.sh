@@ -185,7 +185,10 @@ done
        리뷰 뒤에 push 됐거나 아직 안 돌았다 — 그 커밋은 아무도 안 봤다.
        새 브랜치로 다시 올린다(규칙 7)"
 
-if [ -n "$SHALESS" ] && [ -z "${CLEANUP_ALLOW_SHALESS:-}" ]; then
+# 값이 **정확히 1** 일 때만 연다. 비어 있는지만 보면 `CLEANUP_ALLOW_SHALESS=0`
+# 이나 `=false` — 끄려고 쓰는 값 — 도 「사람이 확인했다」로 읽혀, 현재 head 를
+# 봤는지 알 수 없는 옛 코멘트만으로 머지 단계로 넘어간다 (codex, PR #70).
+if [ -n "$SHALESS" ] && [ "${CLEANUP_ALLOW_SHALESS:-}" != 1 ]; then
     die "봇 증거가 SHA 없는 채널로만 왔다:$SHALESS
        codex 는 지적이 없으면 👍 만, claude 는 --comment 로 돌면 코멘트만 남긴다.
        그것이 **현재 head** 를 본 것인지 기계가 확인할 수 없다.
@@ -431,7 +434,8 @@ if git switch "$BASE" 2>/dev/null; then
     else
         printf '  fetch 를 못 했다(나중에)\n' >&2
     fi
-else
+elif git show-ref --verify -q "refs/heads/$BASE"; then
+    # 로컬 base 는 **있는데** 못 옮겼다 = 다른 worktree 가 점유하고 있다.
     git switch --detach \
         || die "$BASE 로도 detach 로도 못 옮겼다. 워킹트리를 정리하고 다시 부른다"
     bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" \
@@ -439,6 +443,16 @@ else
         || printf '  fetch 를 못 했다(나중에)\n' >&2
     printf '  %s 는 다른 worktree 가 쓰고 있다 — detach 로 나왔다. 그 쪽에서 pull 한다\n' \
         "$BASE" >&2
+else
+    # 로컬 base 가 **아예 없다** — 기능 브랜치만 받은 single-branch clone 이다.
+    # 예전에는 이 갈래도 detach 로 처리해서, 기능 브랜치를 지운 뒤 **HEAD 가
+    # 사라진 커밋에 detached 로 남았다**(codex, PR #70 이 재현). 만들어 옮긴다.
+    bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" \
+      "refs/heads/$BASE:refs/remotes/$BASE_REMOTE/$BASE" \
+        || die "$BASE 를 가져오지 못했다. 로컬에 그 브랜치가 없어 옮길 곳이 없다"
+    git switch -c "$BASE" "refs/remotes/$BASE_REMOTE/$BASE" \
+        || die "$BASE 를 만들지 못했다. 워킹트리를 정리하고 다시 부른다"
+    printf '  로컬에 %s 가 없어 원격에서 만들어 옮겼다\n' "$BASE" >&2
 fi
 
 # `git branch -D` 는 다른 worktree 가 체크아웃한 브랜치를 거부한다. 원자성을

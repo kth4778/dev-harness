@@ -499,6 +499,32 @@ r 1 "$(grep -c 'kill -TERM "-\$pid"' "$SCRIPT" || true)" \
 r 1 "$(grep -c 'kill -KILL "-\$pid"' "$SCRIPT" || true)" \
    '프로세스 그룹 전체에 KILL 을 보낸다'
 
+echo "── codex 지적 (PR #70) ──"
+# `CLEANUP_ALLOW_SHALESS` 는 **정확히 1** 일 때만 연다. 끄려고 쓰는 값이
+# 「사람이 확인했다」로 읽히면 안 된다.
+for v in 0 false no ""; do
+    fresh
+    out=$(CLEANUP_ALLOW_SHALESS="$v" GH_CH_CODEX=reaction GH_CH_CLAUDE=icomment run)
+    r 1 "$?" "CLEANUP_ALLOW_SHALESS='$v' 로는 열리지 않는다"
+done
+fresh
+out=$(CLEANUP_ALLOW_SHALESS=1 GH_CH_CODEX=reaction GH_CH_CLAUDE=icomment run)
+r 0 "$?" "CLEANUP_ALLOW_SHALESS=1 이면 진행한다"
+
+# 로컬에 base 브랜치가 없으면(single-branch clone) 만들어 옮긴다.
+# 예전에는 detach 로 처리해 **지워진 커밋에 HEAD 가 남았다.**
+fresh
+git remote set-url --push origin "$R/me/work"
+# 로컬 base **와 원격 추적 ref** 를 둘 다 없앤다. 추적 ref 가 남아 있으면
+# `git switch main` 이 그것에서 자동으로 브랜치를 만들어, 이 갈래를 안 탄다.
+git branch -D main 2>/dev/null || true
+git update-ref -d refs/remotes/origin/main 2>/dev/null || true
+out=$(run); rc=$?
+r 0 "$rc" '로컬에 base 가 없어도 정리까지 끝난다'
+r "main" "$(git rev-parse --abbrev-ref HEAD)" 'base 를 만들어 그쪽에 서 있다'
+printf '%s' "$out" | grep -q "만들어 옮겼다" \
+  && r y y '무엇을 했는지 알린다' || r y n '무엇을 했는지 알린다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
