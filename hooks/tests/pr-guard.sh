@@ -103,6 +103,13 @@ r 2 "$(feed $'"gh pr comment 61 --body \'@codex\\nreview\'"')" \
 r 0 "$(feed $'"gh pr comment 61 --body \'@codex review\'"')" \
    '공백 하나인 정상 토큰은 통과한다'
 
+echo "── 우회 시도 (PR #62 봇 지적) ──"
+# `[[:space:]]*$` 가 \r 을 공백으로 받아 주는데, gh 는 본문에 담아 보낸다.
+r 2 "$(feed $'"gh pr comment 62 --body \'@codex review\'\\r"')" \
+   '끝에 캐리지 리턴이 붙으면 막는다'
+r 2 "$(feed $'"gh pr comment 62 --body \'@codex\\rreview\'"')" \
+   '본문 안의 캐리지 리턴도 막는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

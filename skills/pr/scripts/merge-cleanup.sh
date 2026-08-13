@@ -248,7 +248,7 @@ if [ -z "$BASE_REMOTE" ]; then
         # **fork 의 낡은 base** 를 당겨 방금 머지한 변경이 빠진 채로 다음 작업이
         # 시작된다. 멈추고 원격을 붙이라고 한다.
         die "PR 의 base 저장소 $BASE_NWO 를 가리키는 원격이 없다.
-       추가한 뒤 다시 부른다:  git remote add upstream https://github.com/$BASE_NWO.git"
+       추가한 뒤 다시 부른다:  git remote add upstream https://$API_HOST/$BASE_NWO.git"
     fi
     BASE_REMOTE=$(git config "branch.$BASE.remote" || echo origin)
 fi
@@ -256,8 +256,9 @@ fi
 # ── 머지 ────────────────────────────────────────────────────────
 # 저장소가 허용하는 전략을 쓴다. merge commit 을 끈 저장소에서 `--merge` 만
 # 두 번 시도하면 **Phase 6 이 통째로 막힌다.** 기본은 --merge 다(규칙 2 —
-# 커밋 단위를 남긴다). 없으면 squash·rebase 로 떨어진다. 그때는 이력이 접히므로
-# 진행 기록이 해시가 아니라 제목을 가리켜야 한다(build 스킬).
+# 커밋 단위를 남긴다). 없으면 **rebase 를 먼저** 본다 — 그쪽은 개별 커밋을
+# 남긴다. squash 는 마지막 수단이다. squash 로 내려가면 이력이 접히므로 진행
+# 기록이 해시가 아니라 제목을 가리켜야 한다(build 스킬).
 # 허용 전략은 **저장소** 설정이다 — `gh pr view` 에는 없는 필드다.
 # 한 번에 셋을 읽는다(claude, PR #55).
 STRAT=--merge
@@ -271,8 +272,11 @@ bounded 30 gh repo view "$API_HOST/$BASE_NWO" \
 read -r M_OK S_OK R_OK < "$ALLOW" || { M_OK=true; S_OK=true; R_OK=true; }
 rm "$ALLOW" 2>/dev/null
 if [ "$M_OK" = "false" ]; then
-    if   [ "$S_OK" = "true" ]; then STRAT=--squash
-    elif [ "$R_OK" = "true" ]; then STRAT=--rebase
+    # **rebase 를 먼저 고른다.** squash 는 하위 기능별로 접어 둔 커밋을 하나로
+    # 뭉개서, Phase 5 가 검사한 단위와 이력이 통째로 사라진다 — 규칙 2 가
+    # 요구하는 모양이 없어진다 (codex, PR #62). rebase 는 개별 커밋을 남긴다.
+    if   [ "$R_OK" = "true" ]; then STRAT=--rebase
+    elif [ "$S_OK" = "true" ]; then STRAT=--squash
     else die "이 저장소는 merge·squash·rebase 를 다 껐다. 설정을 확인한다"
     fi
     printf '  merge commit 이 꺼져 있다 — %s 로 머지한다\n' "$STRAT" >&2
@@ -320,7 +324,7 @@ if git switch "$BASE" 2>/dev/null; then
 else
     git switch --detach \
         || die "$BASE 로도 detach 로도 못 옮겼다. 워킹트리를 정리하고 다시 부른다"
-    bounded 60 git fetch "$BASE_REMOTE" "$BASE" \
+    bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" "$BASE" \
         || printf '  fetch 를 못 했다(나중에)\n' >&2
     printf '  %s 는 다른 worktree 가 쓰고 있다 — detach 로 나왔다. 그 쪽에서 pull 한다\n' \
         "$BASE" >&2
@@ -394,8 +398,12 @@ git config --remove-section "branch.$BR" 2>/dev/null || true
 
 # 낡은 추적 ref 는 **브랜치를 올린 그 원격**에서 턴다. 인자 없이 부르면
 # base 쪽만 훑어 fork 의 낡은 ref 가 남는다.
-bounded 60 git fetch --prune "$HEAD_REMOTE" || printf '  prune 을 못 했다(나중에)\n' >&2
-[ "$BASE_REMOTE" = "$HEAD_REMOTE" ] || bounded 60 git fetch --prune "$BASE_REMOTE" \
+# `--no-write-fetch-head` — fetch 는 기본으로 FETCH_HEAD 를 덮어쓴다. 사용자가
+# 앞서 가져온 커밋을 나중에 `git merge FETCH_HEAD` 로 합칠 예정이었다면 정리가
+# **엉뚱한 ref 를 머지하게 만든다** (codex, PR #62. inspect 는 이미 막고 있었고
+# 이쪽 세 곳을 빠뜨렸다).
+bounded 60 git fetch --no-write-fetch-head --prune "$HEAD_REMOTE" || printf '  prune 을 못 했다(나중에)\n' >&2
+[ "$BASE_REMOTE" = "$HEAD_REMOTE" ] || bounded 60 git fetch --no-write-fetch-head --prune "$BASE_REMOTE" \
     || printf '  base 원격 prune 을 못 했다(나중에)\n' >&2
 
 printf '정리 완료 — #%s 머지됨(%s), %s/%s 와 로컬 브랜치를 지웠다\n' \

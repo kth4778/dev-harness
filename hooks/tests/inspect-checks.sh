@@ -300,6 +300,33 @@ git rm -q src/app.py tests/test_app.py
 git commit -qm "feat: 기능을 구현과 테스트째로 걷어낸다"
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 테스트를 함께 지운 커밋은 통과한다'
 
+echo "── codex 지적 (PR #62) ──"
+# `src/doc/` 는 운영 패키지일 수 있다 — 문서로 보고 검사를 건너뛰면 안 된다.
+fresh; git switch -qc feature/docpkg
+mkdir -p src/doc
+printf 'def parse(): pass\n' > src/doc/parser.py
+git add .; git commit -qm "feat: 파서를 넣는다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'src/doc/ 를 문서로 보지 않는다'
+
+# 최상위 docs/ 는 여전히 문서다.
+fresh; git switch -qc feature/realdocs
+mkdir -p docs
+printf '# 설명\n' > docs/guide.md
+git add .; git commit -qm "docs: 안내를 적는다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '최상위 docs/ 는 문서로 본다'
+
+# 1초 폴링을 남겨 두면 시험 전체가 몇 분 멈춘 것처럼 보인다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'sleep 1;' || true)" \
+   'bounded 가 1초 단위로 폴링하지 않는다'
+
+# push URL 이 슬래시로 끝나면 소유자가 빈 값이 되어 Phase 5 가 통째로 막혔다.
+# 문자열 대조가 아니라 **실제로 그런 URL 을 물려 돌려 본다.**
+fresh; git switch -qc feature/trailslash
+mkdir -p src; printf 'x\n' > src/a.py; printf 't\n' > src/a_test.py
+git add .; git commit -qm "feat: x"
+git remote set-url --push origin "$(git remote get-url origin)/"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" 'push URL 이 슬래시로 끝나도 돈다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

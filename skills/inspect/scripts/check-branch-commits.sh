@@ -59,7 +59,7 @@ if has_remote "$HEAD_REMOTE"; then
     HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
       || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
     HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
-      | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/[^/]+$##; s#\.git$##; s#^.*/##')
+      | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/+$##; s#\.git$##; s#/[^/]+$##; s#^.*/##')
     [ -n "$HEAD_OWNER" ] || { bad "원격 URL 에서 소유자를 못 뽑았다: $HEAD_URL"; exit 1; }
 else
     printf '  (원격이 없다 — 재사용 검사를 건너뛴다)\n' >&2
@@ -75,10 +75,14 @@ bounded() {
     local secs="$1"; shift
     local pid n=0
     "$@" & pid=$!
-    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$secs" ]; do sleep 1; n=$((n+1)); done
+    # 1 초 간격이면 즉시 끝나는 명령도 매번 1 초를 버린다. 시험이 이 스크립트를
+    # 40 번 넘게 돌리고 한 번에 bounded 를 여러 차례 부르므로 그것이 쌓인다
+    # (codex, PR #62 — merge-cleanup 은 앞 라운드에 같은 이유로 고쳤다).
+    local limit=$(( secs * 20 ))
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$limit" ]; do sleep 0.05; n=$((n+1)); done
     if kill -0 "$pid" 2>/dev/null; then
         kill -TERM "$pid" 2>/dev/null
-        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 5 ]; do sleep 1; n=$((n+1)); done
+        n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.05; n=$((n+1)); done
         kill -KILL "$pid" 2>/dev/null
         wait "$pid" 2>/dev/null
         return 124
@@ -132,8 +136,27 @@ fi
 # ── 2. 커밋 단위 ────────────────────────────────────────────────
 # BASE 는 **여기서** 구한다. upstream 이 있으면 그쪽을 먼저 본다 — fork 의
 # origin/<base> 는 대개 낡아서, 그것으로 재면 남의 커밋이 내 것으로 세어진다.
-BASE_REMOTE=$(git remote | grep -x upstream \
-  || git config "branch.$BASE_BRANCH.remote" || echo origin)
+# **이름만 보고 고르지 않는다.** `upstream` 이라는 원격이 다른 미러나 딴
+# 프로젝트를 가리키는 경우가 있고, fork 의 upstream 설정이 낡아 있기도 하다.
+# 그러면 엉뚱한 저장소를 fetch 해 관계없는 merge-base 로 커밋을 센다
+# (codex, PR #62). 위에서 gh 로 확인한 $UPSTREAM 과 URL 을 대조한 뒤에 쓴다.
+#
+# url_nwo/url_host 는 merge-cleanup 과 같은 정규화다 — 끝 슬래시를 먼저 지운다.
+nwo_of() {
+    printf '%s' "$1" \
+      | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
+      | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
+}
+BASE_REMOTE=
+if [ -n "$UPSTREAM" ]; then
+    want_up=$(printf '%s' "$UPSTREAM" | tr '[:upper:]' '[:lower:]')
+    for rmt in $(git remote); do
+        [ "$(nwo_of "$(git remote get-url "$rmt" 2>/dev/null)")" = "$want_up" ] \
+            && { BASE_REMOTE="$rmt"; break; }
+    done
+fi
+[ -n "$BASE_REMOTE" ] \
+    || BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" || echo origin)
 # ref 가 **있어도** 가져온다. 낡은 것으로 merge-base 를 재면 그 사이 upstream 에
 # 들어온 남의 커밋이 내 기능 커밋으로 세어진다 — 있으면 건너뛰던 것이 그 구멍이었다.
 # 갱신 실패를 넘기면 **낡은 ref 로 판정한다** — 그 사이 들어온 남의 커밋이
@@ -178,7 +201,10 @@ SPLIT=$(mktemp)
 # `LICENSE|CHANGELOG|NOTICE` 뒤에 경계가 없어 `src/LICENSEManager.java` 같은
 # 운영 소스가 문서로 분류됐다 — 그런 파일만 고친 커밋은 검사를 통째로
 # 건너뛴다 (codex, PR #59). 토큰 뒤를 파일 끝이나 짧은 꼬리로 못박는다.
-DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)([._-][A-Za-z0-9]+)?$'
+# `doc/` 를 경로 **어디서나** 받으면 `src/doc/parser.py` 만 넣은 구현 커밋이
+# 문서로 분류돼 검사를 통째로 건너뛴다. `doc` 은 흔한 운영 패키지 이름이다
+# (codex, PR #62). 저장소 최상위의 문서 디렉터리로 한정한다.
+DOCPAT='\.(md|markdown|rst|adoc)$|^(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTICE)([._-][A-Za-z0-9]+)?$'
 # 파일 안에 테스트가 함께 있는 관례 — Rust `#[cfg(test)]`, Go `func Test`,
 # Java `@Test`, pytest `def test_`, JS `describe(`/`it(`.
 # `it\(` 에 경계가 없으면 `exit(`·`commit(`·`submit(` 에 걸려 **구현만 있는

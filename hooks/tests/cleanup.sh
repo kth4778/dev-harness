@@ -202,9 +202,11 @@ r 1 "$rc" '요구한 로그인이 없으면 멈춘다'
 
 echo "── codex 지적 (PR #54) ──"
 # merge commit 이 꺼진 저장소에서 --merge 만 두 번 시도하면 Phase 6 이 막힌다.
+# 가짜 gh 의 기본은 셋 다 true 다. merge 만 끄면 이제 rebase 로 떨어진다.
 fresh; out=$(GH_MERGE_OK=false GH_SQUASH_OK=true run); rc=$?
-r 0 "$rc" 'merge commit 이 꺼져 있으면 squash 로 떨어진다'
-printf '%s' "$out" | grep -q "squash" && r y y '어느 전략을 썼는지 알린다' || r y n '어느 전략을 썼는지 알린다'
+r 0 "$rc" 'merge commit 이 꺼져 있으면 다른 전략으로 떨어진다'
+printf '%s' "$out" | grep -qE 'rebase|squash' \
+  && r y y '어느 전략을 썼는지 알린다' || r y n '어느 전략을 썼는지 알린다'
 
 # 큐를 기다리는 사이 누가 push 하면 그 커밋을 지우면 안 된다.
 fresh
@@ -315,6 +317,22 @@ fresh
 git remote set-url --push origin "$R/me/work/"
 out=$(run); rc=$?
 r 0 "$rc" 'push URL 끝에 슬래시가 있어도 저장소를 같게 본다'
+
+echo "── codex 지적 (PR #62) ──"
+# squash 는 하위 기능별 커밋을 하나로 뭉갠다 — rebase 가 가능하면 그쪽이 먼저다.
+fresh; out=$(GH_MERGE_OK=false GH_SQUASH_OK=true GH_REBASE_OK=true run); rc=$?
+r 0 "$rc" 'merge 가 꺼져 있어도 돈다'
+printf '%s' "$out" | grep -q -- '--rebase' \
+  && r y y 'squash 보다 rebase 를 먼저 고른다' || r y n 'squash 보다 rebase 를 먼저 고른다'
+
+fresh; out=$(GH_MERGE_OK=false GH_SQUASH_OK=true GH_REBASE_OK=false run); rc=$?
+printf '%s' "$out" | grep -q -- '--squash' \
+  && r y y 'rebase 도 꺼져 있으면 squash 로 내려간다' || r y n 'rebase 도 꺼져 있으면 squash 로 내려간다'
+
+# fetch 가 사용자의 FETCH_HEAD 를 덮어쓰면 안 된다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
+         | grep 'git fetch' | grep -vc 'no-write-fetch-head' || true)" \
+   'fetch 전부가 FETCH_HEAD 를 건드리지 않는다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
