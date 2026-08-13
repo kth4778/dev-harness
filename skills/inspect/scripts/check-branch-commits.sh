@@ -173,12 +173,15 @@ if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # api.github.com 으로 간다 — 사내 GitHub 에서는 조회가 실패해 **Phase 5 가
     # 항상 막히거나**, GitHub.com 의 동명 저장소 이력을 보고 오판한다
     # (codex, PR #66). merge-cleanup 은 앞 라운드에 고쳤고 여기를 빠뜨렸다.
+    # **소유자 목록 전체**로 거른다. 앞 라운드에 HEAD_OWNERS 를 모아 놓고 판정은
+    # 첫 소유자 하나로 했다 — 「고쳤다」고 보고했는데 동작이 그대로였다
+    # (claude, PR #68). 모으는 것과 쓰는 것은 다른 일이다.
     UP_HOST=$(host_of "$UPSTREAM_URL")
     PRIOR=$(gh_out gh pr list --repo "${UP_HOST:+$UP_HOST/}$UPSTREAM" \
               --state all --head "$BR" --limit 1000 \
       --json number,state,headRepositoryOwner \
-      -q "[.[] | select(((.headRepositoryOwner.login // \"\") | ascii_downcase)
-             == (\"$HEAD_OWNER\" | ascii_downcase))
+      -q "[.[] | select((\"|\" + ((.headRepositoryOwner.login // \"\") | ascii_downcase) + \"|\")
+             | inside(\"$(printf '%s' "$HEAD_OWNERS" | tr '[:upper:]' '[:lower:]')\"))
             | select(.number != $SKIP_PR)] | .[0] // empty") || {
         bad "PR 이력을 못 읽었다(네트워크·인증·시한). 재사용 검사를 통과로 두지 않는다"
         exit 1
@@ -312,8 +315,12 @@ while read -r sha subject; do
     # 한 벌로 두면 둘 중 하나가 깨진다. 삭제를 포함하면 유일한 테스트를 **지운**
     # 커밋이 「테스트가 있다」로 통과하고(PR #58), 삭제를 빼면 테스트만 지운
     # 커밋이 빈 목록이 되어 **검사를 통째로 건너뛴다**(PR #59). 둘 다 codex 다.
-    files_all=$(git show --name-only --format= "$sha")
-    files=$(git show --name-only --format= --diff-filter=d "$sha")
+    # `-m --first-parent` — merge 커밋은 기본으로 **아무 경로도 안 낸다.** 그러면
+    # 목록이 비어 아래 `continue` 로 빠지고, 테스트 없는 구현을 들여온 merge
+    # 커밋이 그대로 통과한다 (codex, PR #68). 첫 부모와의 diff 를 낸다.
+    # 일반 커밋에도 같은 결과다 — 실측으로 확인했다.
+    files_all=$(git show --name-only --format= -m --first-parent "$sha")
+    files=$(git show --name-only --format= -m --first-parent --diff-filter=d "$sha")
     [ -n "$files_all" ] || continue
 
     # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나
@@ -332,7 +339,7 @@ while read -r sha subject; do
     # 모양인데, 삭제를 빼고 세면 「테스트가 없다」로 걸렸다 (codex, PR #60).
     # 반대로 「구현은 고치고 테스트만 삭제」는 걸려야 한다. 둘을 구분한다.
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
-    del_only=$(git show --name-only --format= --diff-filter=D "$sha")
+    del_only=$(git show --name-only --format= -m --first-parent --diff-filter=D "$sha")
     del_test=$(printf '%s\n' "$del_only" | grep -cE "$TESTPAT" || true)
     # 경로가 테스트로 안 보여도, **지워진 파일 안에 인라인 테스트가 들어 있었으면**
     # 테스트를 함께 지운 것이다. `--diff-filter=d` 가 그 파일을 $files 에서 빼기

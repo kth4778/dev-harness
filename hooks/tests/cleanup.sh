@@ -460,6 +460,14 @@ r 1 "$rc" '추적 파일이 바뀐 경우도 멈춘다'
 r 1 "$(grep -c 'GH_HOST=$(url_host "$PR_URL")' "$SCRIPT" || true)" \
    '대조용 호스트를 url_host 로 정규화한다'
 
+echo "── codex 지적 (PR #68) ──"
+# `git status` 조회 자체가 실패하면 「깨끗함」으로 읽지 않는다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
+         | grep -c 'git status --porcelain 2>/dev/null | grep -c' || true)" \
+   'status 를 파이프로만 세지 않는다'
+r 1 "$(grep -c 'die "작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
+   'status 조회 실패를 멈춤으로 다룬다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

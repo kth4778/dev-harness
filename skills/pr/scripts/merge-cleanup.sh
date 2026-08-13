@@ -92,7 +92,15 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
 # 커밋 SHA 만 맞추면 미커밋 변경이 있어도 통과하는데, 그 뒤 `gh pr merge` 가
 # 먼저 돌고 브랜치를 옮기지 못해 **서버만 머지되고 정리가 멈춘다.** 옮겨지면
 # 그 변경이 통합 브랜치로 딸려 간 채 기능 브랜치가 지워진다 (codex, PR #67).
-DIRTY=$(git status --porcelain 2>/dev/null | grep -c . || true)
+# 조회 **실패**도 잡는다. `| grep -c . || true` 로만 쓰면 손상된 인덱스나 읽을 수
+# 없는 서브모듈로 status 가 죽어도 DIRTY=0 이 되어, 안전 검사가 통과한 뒤
+# 브랜치 전환에서 터진다 (codex, PR #68). 또 실패를 삼킬 뻔했다.
+ST_OUT=$(mktemp)
+git status --porcelain > "$ST_OUT" 2>/dev/null \
+    || { rm -f "$ST_OUT"; die "작업 트리 상태를 못 읽었다(인덱스 손상·서브모듈).
+       원격을 건드리기 전에 확인한다:  git status"; }
+DIRTY=$(grep -c . "$ST_OUT" || true)
+rm -f "$ST_OUT"
 [ "$DIRTY" -eq 0 ] \
     || die "작업 트리에 커밋되지 않은 변경이 $DIRTY 개 있다.
        머지하면 브랜치를 옮기지 못해 정리가 중간에 멈춘다 — 먼저 정리한다:

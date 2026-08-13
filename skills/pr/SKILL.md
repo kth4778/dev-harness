@@ -278,27 +278,15 @@ BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록�
 
 **문서 저장소(위키)는 스쿼시가 맞다.** 거기는 커밋 단위가 판정 대상이 아니다.
 
-머지 후 로컬 정리:
+**머지 뒤에 손으로 더 할 것이 없다.** `merge-cleanup.sh` 가 통합 브랜치로 옮기고,
+검증한 원격에서 갱신하고, 원격·로컬 브랜치와 그 설정까지 지운다.
 
-```bash
-# 이 블록은 리뷰 뒤 **새 셸**에서 돈다. 앞 블록의 변수는 남아 있지 않으므로
-# 여기서 다시 구한다 — 빌려 쓰면 빈 문자열이 되어 명령이 통째로 실패한다.
-BR=$(git rev-parse --abbrev-ref HEAD)
-REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
-  || git config "branch.$BR.remote" || echo origin)
-BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
-[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+예전에는 여기에 수동 정리 블록이 있었는데 **걷어냈다**(2026-08-13, codex).
+그 블록은 원격을 새로 구했는데, 그 시점에는 이미 통합 브랜치에 서 있어서
+**head 가 아니라 base 의 설정**이 잡힌다. fork 처럼 둘이 다른 구성에서는
+스크립트가 검증한 upstream 대신 fork 의 base 를 당겨 로컬을 오염시킨다.
 
-git switch "$BASE" && git pull
-git fetch --prune "$REMOTE"          # 브랜치를 올린 그 원격을 정리한다.
-                                     # 인자 없이 부르면 통합 브랜치의 원격만
-                                     # 훑어 fork 쪽 낡은 ref 가 그대로 남는다
-```
-
-**`git branch -d`를 따로 부르지 않는다.** 스크립트가 이미 로컬까지 지웠으므로
-「branch not found」로 실패하고, 이 블록을 한 번에 돌리면 **블록 전체가 실패로
-보여 뒤따르는 위키 반영이 멈춘다.** 앞선 라운드에서 갈아탄 브랜치가 남아 있으면
-그때만 이름을 짚어 지운다.
+정리가 중간에 멈췄으면 스크립트가 그 이유를 찍고 종료한다. 그때만 손으로 본다.
 
 ## 6. 지식 위키 반영
 

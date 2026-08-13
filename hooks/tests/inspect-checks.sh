@@ -25,7 +25,20 @@ case "$*" in
   *"repo view"*)             printf '%s\t%s\t%s\n' \
                                "${GH_PARENT:-}" "${GH_UPSTREAM:-}" "${GH_URL:-}" ;;
   *"pr list"*"--state open"*) printf '%s\n' "${GH_CUR:-}" ;;
-  *"pr list"*)               printf '%s\n' "${GH_PRIOR:-}" ;;
+  # **`-q` 필터를 실제로 적용한다.** 그냥 뱉으면 스크립트의 jq 식이 시험에서
+  # 한 번도 안 돌아, 필터가 틀려도 통과한다 (claude, PR #68 을 고치다 발견).
+  # GH_PRIOR 는 객체 하나로 주고, 여기서 배열로 감싼다.
+  *"pr list"*)
+    q=; nx=0
+    for a in "$@"; do
+      [ "$nx" = 1 ] && { q="$a"; nx=0; continue; }
+      [ "$a" = "-q" ] || [ "$a" = "--jq" ] && nx=1
+    done
+    if [ -n "${GH_PRIOR:-}" ] && [ -n "$q" ] && command -v jq >/dev/null 2>&1; then
+      printf '[%s]' "$GH_PRIOR" | jq -r "$q" 2>/dev/null
+    else
+      printf '%s\n' "${GH_PRIOR:-}"
+    fi ;;
 esac
 GH
 chmod +x "$BIN/gh"
@@ -42,6 +55,13 @@ fresh() {
     git push -q origin main 2>/dev/null; git remote set-head origin main 2>/dev/null
 }
 out_of() { bash "$SCRIPT" "${1:-main}" 2>&1; }
+
+# 옛 PR 응답을 만든다. 가짜 gh 가 `-q` 필터를 실제로 돌리므로 소유자가 맞아야
+# 걸린다 — 현재 원격의 소유자를 그대로 넣는다.
+prior() {
+    printf '{"number":%s,"state":"%s","headRepositoryOwner":{"login":"%s"}}' \
+      "$1" "$2" "$(basename "$(dirname "$(git remote get-url --push origin 2>/dev/null)")")"
+}
 
 echo "── 보호 브랜치 ──"
 fresh; printf 'x\n' > f.txt; git add f.txt
@@ -96,7 +116,7 @@ printf '%s' "$(out_of)" | grep -q "3회  same.txt" && r y y '세 번 건드린 �
 echo "── 옛 PR 이 있으면 ──"
 fresh; git switch -qc feature/prior
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
-r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' out_of >/dev/null 2>&1; echo $?)" '옛 PR 이 있으면 FAIL'
+r 1 "$(GH_UPSTREAM=o/r GH_PRIOR="$(prior 9 MERGED)" out_of >/dev/null 2>&1; echo $?)" '옛 PR 이 있으면 FAIL'
 
 echo "── codex 지적 (PR #51) ──"
 # 이름에 test 가 든 운영 파일이 테스트로 잡히면 갈라진 커밋이 통과한다.
@@ -128,7 +148,7 @@ printf '%s' "$(out_of)" | grep -q "detached" && r y y '무엇이 문제인지 �
 # 얼린 PR 에 커밋을 얹는 것을 막아야 한다.
 fresh; git switch -qc feature/cur
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
-r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":7,"state":"OPEN"}' out_of >/dev/null 2>&1; echo $?)" \
+r 1 "$(GH_UPSTREAM=o/r GH_PRIOR="$(prior 7 OPEN)" out_of >/dev/null 2>&1; echo $?)" \
     'Phase 5 에서는 열린 PR 도 재사용이다'
 r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='' bash "$SCRIPT" main --phase6 7 >/dev/null 2>&1; echo $?)" \
     'Phase 6 에서 넘긴 그 PR 하나는 예외다'
@@ -137,7 +157,7 @@ echo "── claude 지적 (PR #53) ──"
 fresh; git switch -qc feature/none
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
 # 열린 PR 이 없을 때 jq 가 깨져 재사용 검사가 통째로 무력해졌다.
-r 1 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' out_of >/dev/null 2>&1; echo $?)" \
+r 1 "$(GH_UPSTREAM=o/r GH_PRIOR="$(prior 9 MERGED)" out_of >/dev/null 2>&1; echo $?)" \
     '열린 PR 이 없어도 옛 머지 PR 을 잡는다(jq 가 안 깨진다)'
 
 fresh; git switch -qc feature/zero
@@ -443,6 +463,35 @@ r "github.com"      "$(. "$FN"; host_of ssh://git@github.com:22/me/w.git)" 'ssh 
 r "github.com"      "$(. "$FN"; host_of https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
 r "git.ex.com:8443" "$(. "$FN"; host_of https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
 rm -f "$FN"
+
+echo "── claude 지적 (PR #68) ──"
+# push URL 이 둘이면 **두 번째 소유자**의 옛 PR 도 걸려야 한다.
+# 앞 라운드에는 소유자를 모으기만 하고 첫 것으로만 걸러서 동작이 그대로였다.
+fresh; git switch -qc feature/twoowners
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+git remote set-url --push origin "https://host/first/work.git"
+git remote set-url --add --push origin "https://host/second/work.git"
+# 옛 PR 의 소유자가 **두 번째** 다.
+r 1 "$(GH_UPSTREAM=o/r \
+       GH_PRIOR='{"number":9,"state":"MERGED","headRepositoryOwner":{"login":"second"}}' \
+       out_of >/dev/null 2>&1; echo $?)" \
+   '두 번째 push URL 소유자의 옛 PR 도 잡는다'
+
+# 관계없는 소유자의 PR 은 안 걸려야 한다 — 좁힌 것이 넓어지면 안 된다.
+r 0 "$(GH_UPSTREAM=o/r \
+       GH_PRIOR='{"number":9,"state":"MERGED","headRepositoryOwner":{"login":"stranger"}}' \
+       out_of >/dev/null 2>&1; echo $?)" \
+   '내 소유자가 아닌 PR 은 안 잡는다'
+
+echo "── codex 지적 (PR #68) ──"
+# merge 커밋은 기본으로 경로를 안 낸다 — 검사를 건너뛰면 안 된다.
+fresh; git switch -qc feature/withmerge
+printf 'base2\n' > b2.txt; printf 't\n' > b2_test.txt; git add .; git commit -qm "feat: 짝"
+git switch -qc side/impl
+printf 'impl\n' > only_impl.py; git add .; git commit -qm "feat: 구현만"
+git switch -q feature/withmerge
+git merge -q --no-ff side/impl -m "merge: side 를 들인다" 2>/dev/null
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'merge 커밋으로 들여온 구현만 있는 변경도 잡는다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
