@@ -261,6 +261,45 @@ printf 'class LICENSEManager {}\n' > src/LICENSEManager.java
 git add .; git commit -qm "feat: 라이선스 관리자를 넣는다"
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'LICENSEManager.java 를 문서로 보지 않는다'
 
+echo "── codex 지적 (PR #60) ──"
+# 운영 코드에 단언 한 줄만 넣은 커밋이 「테스트를 고쳤다」로 통과하면 안 된다.
+# 테스트 영역은 파일 아래쪽이므로 위쪽만 건드린 것을 가려내야 한다.
+fresh; git switch -qc feature/prodassert
+mkdir -p src
+{ printf 'fn f(x:i32)->i32{ x }\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(f(1),1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "feat: 처음"
+{ printf 'fn f(x:i32)->i32{ assert!(x>0); x }\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(f(1),1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "feat: 운영 코드에 단언만 넣는다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '운영 코드의 단언을 테스트 변경으로 세지 않는다'
+
+# 반대 갈래 — 테스트 영역을 고쳤으면 통과해야 한다.
+fresh; git switch -qc feature/testarea
+mkdir -p src
+{ printf 'fn f(x:i32)->i32{ x }\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(f(1),1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "feat: 처음"
+{ printf 'fn f(x:i32)->i32{ x*2 }\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(f(1),2); } }\n'; } > src/lib.rs
+git add .; git commit -qm "feat: 구현과 테스트를 함께 고친다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '테스트 영역을 고쳤으면 통과한다'
+
+# 기능을 걷어내며 구현과 테스트를 **함께 지운** 커밋은 정상이다.
+fresh; git switch -qc feature/removeboth
+mkdir -p src tests
+printf 'def f(): pass\n'      > src/app.py
+printf 'def test_f(): pass\n' > tests/test_app.py
+printf 'def g(): pass\n'      > src/keep.py
+git add .; git commit -qm "feat: 처음"
+git rm -q src/app.py tests/test_app.py
+git commit -qm "feat: 기능을 구현과 테스트째로 걷어낸다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 테스트를 함께 지운 커밋은 통과한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

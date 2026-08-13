@@ -264,6 +264,29 @@ r 1 "$(grep -c 'git worktree list' "$SCRIPT" || true)" \
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'sleep 1;' || true)" \
    'bounded 가 1초 단위로 폴링하지 않는다'
 
+echo "── codex 지적 (PR #60) ──"
+# base 를 다른 worktree 가 쓰고 있으면 `git switch $BASE` 가 실패한다.
+# 그때도 정리까지 끝나야 한다 — 예전에는 머지만 되고 아무것도 못 지웠다.
+fresh
+git remote set-url --push origin "$R/me/work"
+git worktree add -q "$R/wt-main" main 2>/dev/null
+out=$(run); rc=$?
+r 0 "$rc" 'base 가 다른 worktree 에 있어도 정리까지 끝난다'
+r "" "$(git branch --list feature/x)" '그 경우에도 로컬 브랜치가 지워졌다'
+printf '%s' "$out" | grep -q "다른 worktree" \
+  && r y y 'detach 로 나왔음을 알린다' || r y n 'detach 로 나왔음을 알린다'
+git worktree remove --force "$R/wt-main" 2>/dev/null || true
+
+# 지운 브랜치의 설정이 남으면 같은 이름을 다시 팔 때 옛 upstream 을 물려받는다.
+r 1 "$(grep -c 'remove-section' "$SCRIPT" || true)" \
+   '브랜치 설정도 함께 지운다'
+
+# PR 호스트는 PR 자신의 URL 에서 구해야 한다.
+# `GH_HOST=` 를 만드는 줄만 본다. BASE_REMOTE 폴백이 같은 설정을 읽는 것은
+# 정당하다 — 거기는 「어느 원격에서 당길까」를 고르는 자리다.
+r 1 "$(grep -c 'GH_HOST=$(url_host "$PR_URL")' "$SCRIPT" || true)" \
+   'PR 호스트를 PR 자신의 URL 에서 구한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

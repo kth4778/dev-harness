@@ -197,12 +197,16 @@ MY_NWO=$(url_nwo "$HEAD_URL")
 MY_HOST=$(url_host "$HEAD_URL")
 PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # gh 가 향하는 호스트. 기본은 github.com 이다.
-GH_HOST=$(git remote get-url "$(git config "branch.$BASE.remote" || echo origin)" 2>/dev/null)
-GH_HOST=$(url_host "${GH_HOST:-github.com}")
+# **PR 자신의 URL 에서 구한다.** 로컬 원격 설정에서 구하면, 통합 브랜치가
+# 사내 미러를 추적하는 구성에서 정상 head 를 「다른 서버」로 오판해 아래의
+# 올바른 base 탐색에 닿기도 전에 멈춘다 (codex, PR #60).
+GH_HOST=$(url_host "$PR_URL")
 [ "$MY_NWO" = "$PR_NWO" ] \
     || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($HEAD_URL) 다
        — 다른 저장소의 동명 브랜치다"
-[ -z "$GH_HOST" ] || [ "$MY_HOST" = "$GH_HOST" ] \
+# 한쪽이 비면 대조할 것이 없다 — 로컬 경로 원격이나 bundle 은 호스트가 없다.
+# `owner/repo` 대조는 위에서 이미 통과했으므로 더 가릴 것이 없다.
+[ -z "$GH_HOST" ] || [ -z "$MY_HOST" ] || [ "$MY_HOST" = "$GH_HOST" ] \
     || die "PR 은 $GH_HOST 의 것인데 내 push 대상은 $MY_HOST 다
        — 같은 이름이지만 다른 서버다. 지우지 않는다"
 # base 원격도 **PR 이 향한 저장소**에서 정한다. 로컬 설정만 보면 fork 의 낡은
@@ -293,11 +297,26 @@ done
 # ── 정리 ────────────────────────────────────────────────────────
 # 지울 브랜치에서 먼저 나온다. 실패하면 멈춘다 — 그대로 가면 체크아웃된
 # 브랜치를 지우려다 실패하고, 정리가 된 것처럼 보인다.
-git switch "$BASE" || die "$BASE 로 옮기지 못했다. 워킹트리를 정리하고 다시 부른다"
-# 원격을 명시한다. 인자 없이 부르면 브랜치에 설정된 upstream 을 따라가
-# **PR 이 향한 저장소가 아닌 곳**에서 당긴다 — 방금 머지한 변경이 빠진다.
-bounded 60 git pull --ff-only "$BASE_REMOTE" "$BASE" \
-    || printf '  pull 을 못 했다(나중에)\n' >&2
+# 기능 브랜치를 별도 worktree 에서 작업하고 기본 worktree 가 이미 $BASE 를
+# 체크아웃한 구성이 흔하다. 그때 `git switch "$BASE"` 는
+# `already used by worktree` 로 실패한다 — **머지만 되고 정리를 하나도 못 하며,
+# 다시 불러도 head 대조에서 막힌다** (codex, PR #60).
+#
+# 여기서 필요한 것은 「지울 브랜치에서 나오는 것」뿐이다. base 로 못 가면
+# detach 로 나온다. base 갱신은 그것을 쓰고 있는 worktree 의 몫이다.
+if git switch "$BASE" 2>/dev/null; then
+    # 원격을 명시한다. 인자 없이 부르면 브랜치에 설정된 upstream 을 따라가
+    # **PR 이 향한 저장소가 아닌 곳**에서 당긴다 — 방금 머지한 변경이 빠진다.
+    bounded 60 git pull --ff-only "$BASE_REMOTE" "$BASE" \
+        || printf '  pull 을 못 했다(나중에)\n' >&2
+else
+    git switch --detach \
+        || die "$BASE 로도 detach 로도 못 옮겼다. 워킹트리를 정리하고 다시 부른다"
+    bounded 60 git fetch "$BASE_REMOTE" "$BASE" \
+        || printf '  fetch 를 못 했다(나중에)\n' >&2
+    printf '  %s 는 다른 worktree 가 쓰고 있다 — detach 로 나왔다. 그 쪽에서 pull 한다\n' \
+        "$BASE" >&2
+fi
 
 # 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
 # --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
@@ -348,6 +367,9 @@ if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || tru
     die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
 fi
 
+# ref 를 지운 뒤 `branch.<이름>.*` 설정도 지운다. 안 지우면 같은 이름으로 다시
+# 판 브랜치가 **옛 upstream 을 그대로 물려받고**, 이 스크립트의 HEAD_REMOTE
+# 계산도 낡은 원격을 고른다 (codex, PR #60).
 if ! git update-ref -d "refs/heads/$BR" "$REVIEWED" 2>/dev/null; then
     # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —
     # 그대로 「정리 완료」를 찍으면 그 브랜치가 재사용 대상으로 남는다.
@@ -355,6 +377,9 @@ if ! git update-ref -d "refs/heads/$BR" "$REVIEWED" 2>/dev/null; then
         && die "로컬 브랜치를 못 지웠다(ref 잠김·다른 worktree 에서 체크아웃)" \
         || printf '  로컬 브랜치가 이미 없다\n' >&2
 fi
+
+# `branch.<이름>.*` 설정을 지운다. 없으면 종료 5 를 주므로 실패로 보지 않는다.
+git config --remove-section "branch.$BR" 2>/dev/null || true
 
 # 낡은 추적 ref 는 **브랜치를 올린 그 원격**에서 턴다. 인자 없이 부르면
 # base 쪽만 훑어 fork 의 낡은 ref 가 남는다.

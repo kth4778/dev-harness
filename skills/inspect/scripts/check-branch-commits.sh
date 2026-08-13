@@ -184,8 +184,6 @@ DOCPAT='\.(md|markdown|rst|adoc)$|(^|/)(docs|doc)/|(^|/)(LICENSE|CHANGELOG|NOTIC
 # `it\(` 에 경계가 없으면 `exit(`·`commit(`·`submit(` 에 걸려 **구현만 있는
 # 커밋이 통과한다** (claude, PR #55). 줄 시작이나 비단어 뒤로 못박는다.
 INLINE_TEST='#\[cfg\(test\)\]|func Test[A-Z]|@Test|def test_|(^|[^A-Za-z0-9_.])(describe|it|test)\('
-# 단언 키워드. 「테스트 영역을 이번에 건드렸나」를 재는 데 쓴다.
-ASSERTPAT='assert|EXPECT_|expect\(|\.(to(Be|Equal|Throw)|should)\b|should[A-Z_(]|verify\(|assertThat'
 
 while read -r sha subject; do
     # 커밋이 0개면 heredoc 에 개행 하나가 남아 이 루프가 **한 번 돈다.**
@@ -215,7 +213,18 @@ while read -r sha subject; do
     nondoc=$(printf '%s\n' "$files_all" | grep -vE "$DOCPAT" | grep -c . || true)
     [ "$nondoc" -gt 0 ] || continue
 
+    # 살아 있는 테스트(삭제 아님)와 **삭제된** 테스트를 가른다.
+    #
+    # 기능을 제거하면서 구현과 테스트를 **함께 삭제**한 커밋은 규칙이 요구하는
+    # 모양인데, 삭제를 빼고 세면 「테스트가 없다」로 걸렸다 (codex, PR #60).
+    # 반대로 「구현은 고치고 테스트만 삭제」는 걸려야 한다. 둘을 구분한다.
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
+    del_only=$(git show --name-only --format= --diff-filter=D "$sha")
+    del_test=$(printf '%s\n' "$del_only" | grep -cE "$TESTPAT" || true)
+    del_src=$(printf '%s\n' "$del_only" | grep -vE "$TESTPAT" \
+                | grep -vE "$DOCPAT" | grep -c . || true)
+    # 구현과 테스트를 함께 지운 커밋은 여기서 통과시킨다.
+    [ "$has_test" = 0 ] && [ "$del_test" -gt 0 ] && [ "$del_src" -gt 0 ] && continue
     # 구현 수에서 **문서를 뺀다.** 안 빼면 테스트와 README 만 고친 커밋이
     # 「구현도 있다」로 읽혀 그대로 통과한다 (codex, PR #58).
     has_src=$(printf '%s\n' "$files_all" | grep -vE "$TESTPAT" \
@@ -237,20 +246,31 @@ while read -r sha subject; do
     if [ "$has_test" = 0 ]; then
         added_test=$(git show --format= -U0 "$sha" | grep '^+' \
                        | grep -cE "$INLINE_TEST" || true)
-        # 바뀐 줄(+/-)에 단언이 있으면 테스트를 건드린 것이다.
-        touched_test=$(git show --format= -U0 "$sha" | grep -E '^[+-]' \
-                         | grep -cE "$ASSERTPAT" || true)
-        holds_test=0
+        # 「단언이 어디선가 바뀌었다」로 재면 운영 코드에 `assert!` 한 줄만 넣어도
+        # 통과한다 (codex, PR #60). **그 변경 줄이 테스트 영역에 있는지** 본다.
+        #
+        # 테스트 영역은 파일에서 테스트 표식이 처음 나오는 줄부터다 — Rust 의
+        # `#[cfg(test)] mod tests`, JS 의 `describe(` 가 그 자리다. 그 줄 이후를
+        # 건드렸으면 테스트를 고친 것이고, 그 앞만 건드렸으면 구현만 고친 것이다.
+        #
+        # `head -1` 을 쓰지 않는다 — 앞의 grep 이 SIGPIPE 로 죽는다. awk 는
+        # 스트림을 끝까지 읽으므로 안전하다.
+        touched_test=0
         while IFS= read -r f; do
             [ -n "$f" ] || continue
-            n=$(git show "$sha:$f" 2>/dev/null | grep -cE "$INLINE_TEST" || true)
-            [ "${n:-0}" -gt 0 ] && { holds_test=1; break; }
+            tstart=$(git show "$sha:$f" 2>/dev/null \
+                       | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
+            [ -n "$tstart" ] || continue
+            # 이 파일 hunk 들의 시작 줄 중 가장 큰 것.
+            last=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
+                     | sed -nE 's/^@@ -[0-9,]+ \+([0-9]+).*/\1/p' | sort -n | tail -1)
+            [ -n "$last" ] || continue
+            [ "$last" -ge "$tstart" ] && { touched_test=1; break; }
         done <<FILEEOF
 $files
 FILEEOF
-        # 새 테스트를 넣었거나, 테스트를 품은 파일에서 단언을 건드렸으면 통과.
-        if [ "$added_test" -gt 0 ] \
-           || { [ "$holds_test" = 1 ] && [ "$touched_test" -gt 0 ]; }; then
+        # 새 테스트를 넣었거나, 테스트 영역을 건드렸으면 통과.
+        if [ "$added_test" -gt 0 ] || [ "$touched_test" = 1 ]; then
             continue
         fi
     fi
