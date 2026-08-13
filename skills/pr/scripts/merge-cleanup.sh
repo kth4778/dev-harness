@@ -265,12 +265,22 @@ STRAT=--merge
 ALLOW=$(mktemp)
 # base 저장소의 설정을 읽는다. 인자 없이 부르면 현재 폴더의 저장소(fork)를
 # 보므로, fork 와 upstream 설정이 다르면 엉뚱한 전략을 고른다 (codex, PR #56).
-bounded 30 gh repo view "$API_HOST/$BASE_NWO" \
+# **실패를 「셋 다 허용」으로 읽지 않는다.** 권한이 좁거나 일시 오류로 조회가
+# 실패하면 빈 파일을 읽고 기본값을 깔았는데, merge commit 이 꺼진 저장소에서도
+# `--merge` 를 골라 **Phase 6 가 막혔다** — 쓸 수 있는 대체 전략이 있는데도
+# 그렇다 (codex, PR #63). 실패는 실패로 낸다.
+if bounded 30 gh repo view "$API_HOST/$BASE_NWO" \
     --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed \
     -q '"\(.mergeCommitAllowed) \(.squashMergeAllowed) \(.rebaseMergeAllowed)"' \
-    > "$ALLOW" 2>/dev/null
-read -r M_OK S_OK R_OK < "$ALLOW" || { M_OK=true; S_OK=true; R_OK=true; }
-rm "$ALLOW" 2>/dev/null
+    > "$ALLOW" 2>/dev/null; then
+    read -r M_OK S_OK R_OK < "$ALLOW" \
+        || { rm -f "$ALLOW"; die "머지 설정 응답이 비었다. 정리하지 않는다"; }
+else
+    rm -f "$ALLOW"
+    die "저장소의 머지 설정을 못 읽었다(권한·네트워크). 어느 전략이 열렸는지 모르는 채로
+       머지하지 않는다"
+fi
+rm -f "$ALLOW"
 if [ "$M_OK" = "false" ]; then
     # **rebase 를 먼저 고른다.** squash 는 하위 기능별로 접어 둔 커밋을 하나로
     # 뭉개서, Phase 5 가 검사한 단위와 이력이 통째로 사라진다 — 규칙 2 가
@@ -319,12 +329,22 @@ done
 if git switch "$BASE" 2>/dev/null; then
     # 원격을 명시한다. 인자 없이 부르면 브랜치에 설정된 upstream 을 따라가
     # **PR 이 향한 저장소가 아닌 곳**에서 당긴다 — 방금 머지한 변경이 빠진다.
-    bounded 60 git pull --ff-only "$BASE_REMOTE" "$BASE" \
-        || printf '  pull 을 못 했다(나중에)\n' >&2
+    #
+    # `git pull` 을 쓰지 않는다. 그 명령에는 `--no-write-fetch-head` 가 없어서
+    # 내부 fetch 가 사용자의 FETCH_HEAD 를 덮어쓴다 — 다른 fetch 들만 막아 봐야
+    # 여기서 그대로 뚫린다 (codex, PR #63). fetch 와 fast-forward 로 나눈다.
+    if bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" \
+         "refs/heads/$BASE:refs/remotes/$BASE_REMOTE/$BASE"; then
+        git merge --ff-only "refs/remotes/$BASE_REMOTE/$BASE" 2>/dev/null \
+            || printf '  fast-forward 를 못 했다(로컬이 갈렸다). 나중에 본다\n' >&2
+    else
+        printf '  fetch 를 못 했다(나중에)\n' >&2
+    fi
 else
     git switch --detach \
         || die "$BASE 로도 detach 로도 못 옮겼다. 워킹트리를 정리하고 다시 부른다"
-    bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" "$BASE" \
+    bounded 60 git fetch --no-write-fetch-head "$BASE_REMOTE" \
+      "refs/heads/$BASE:refs/remotes/$BASE_REMOTE/$BASE" \
         || printf '  fetch 를 못 했다(나중에)\n' >&2
     printf '  %s 는 다른 worktree 가 쓰고 있다 — detach 로 나왔다. 그 쪽에서 pull 한다\n' \
         "$BASE" >&2
@@ -336,7 +356,10 @@ RLS=$(mktemp)
 # 패턴을 **전체 ref** 로 준다. 짧은 이름은 ref 이름의 끝부분에도 맞아서,
 # 브랜치가 `x` 일 때 원격의 `feature/x` 까지 함께 잡힌다 — 뒤의 awk 가 첫 행을
 # 읽어 **엉뚱한 OID 를 이 브랜치의 것으로 오인한다** (codex, PR #61).
-bounded 30 git ls-remote --exit-code "$HEAD_REMOTE" "refs/heads/$BR" > "$RLS" 2>/dev/null
+# **push URL 로 조회한다.** 이름으로 부르면 git 은 fetch URL 을 본다. fetch 와
+# push URL 이 다른 삼각 워크플로에서는 fetch 쪽에 이 브랜치가 없어 「이미 없다」로
+# 읽히고, **실제 push 대상의 브랜치가 살아남는다** (codex, PR #63).
+bounded 30 git ls-remote --exit-code "$HEAD_URL" "refs/heads/$BR" > "$RLS" 2>/dev/null
 case $? in
     0)  # 원격이 아직 그 커밋을 가리키는지 본다. 큐를 기다리는 20분 사이에
         # 누가 push 하거나 브랜치를 다시 만들었으면 **그 새 커밋이 날아간다** —

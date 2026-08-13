@@ -327,6 +327,32 @@ git add .; git commit -qm "feat: x"
 git remote set-url --push origin "$(git remote get-url origin)/"
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" 'push URL 이 슬래시로 끝나도 돈다'
 
+echo "── codex 지적 (PR #63) ──"
+# 기존 구현 파일에 테스트 블록만 붙인 커밋은 테스트-only 다 — 걸려야 한다.
+#
+# 바탕 커밋은 **main 에 두고 push 한다.** 판정 범위가 origin/main..HEAD 이므로,
+# push 하지 않으면 그 커밋도 범위에 남아 무엇을 재는지 흐려진다.
+fresh
+mkdir -p src; printf 'fn f()->i32{1}\n' > src/lib.rs
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/testonlyinline
+{ printf 'fn f()->i32{1}\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ #[test] fn a(){ assert_eq!(1,1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "test: 테스트 블록만 붙인다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '인라인 테스트만 추가한 커밋을 통과시키지 않는다'
+
+# 반대 갈래 — 구현도 함께 바뀌면 통과한다.
+fresh
+mkdir -p src; printf 'fn f()->i32{1}\n' > src/lib.rs
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/bothinline
+{ printf 'fn f()->i32{7}\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ #[test] fn a(){ assert_eq!(f(),7); } }\n'; } > src/lib.rs
+git add .; git commit -qm "feat: 구현을 고치고 테스트를 붙인다"
+r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 인라인 테스트를 함께 넣으면 통과한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

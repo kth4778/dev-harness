@@ -61,6 +61,8 @@ esac
 # 허용 전략은 저장소 설정이다 — repo view 로 온다.
 case "$*" in
   *"repo view"*)
+    # 조회 실패를 흉내낼 수 있게 둔다 — 실패를 「셋 다 허용」으로 읽으면 안 된다.
+    [ "${GH_REPO_VIEW_RC:-0}" = "0" ] || exit "$GH_REPO_VIEW_RC"
     printf '%s %s %s\n' "${GH_MERGE_OK:-true}" "${GH_SQUASH_OK:-true}" "${GH_REBASE_OK:-true}"
     exit 0 ;;
 esac
@@ -333,6 +335,32 @@ printf '%s' "$out" | grep -q -- '--squash' \
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
          | grep 'git fetch' | grep -vc 'no-write-fetch-head' || true)" \
    'fetch 전부가 FETCH_HEAD 를 건드리지 않는다'
+
+echo "── codex 지적 (PR #63) ──"
+# 머지 설정 조회가 실패하면 「셋 다 허용」으로 깔지 말고 멈춘다.
+# 예전에는 빈 응답을 읽고 --merge 를 골라, merge 가 꺼진 저장소에서 Phase 6 이
+# 막혔다 — 쓸 수 있는 대체 전략이 있는데도 그랬다.
+fresh; out=$(GH_REPO_VIEW_RC=1 run); rc=$?
+r 1 "$rc" '머지 설정을 못 읽으면 멈춘다'
+r "feature/x" "$(git branch --show-current)" '그때는 아무것도 안 지운다'
+
+# `git pull` 은 --no-write-fetch-head 를 못 받는다 — 쓰지 않아야 한다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'git pull' || true)" \
+   'git pull 을 쓰지 않는다(FETCH_HEAD 를 덮어쓴다)'
+r 1 "$(grep -c 'merge --ff-only' "$SCRIPT" || true)" \
+   'fetch 와 fast-forward 로 나눈다'
+
+# 원격 브랜치 조회는 push URL 로 한다 — 이름은 fetch URL 을 본다.
+r 1 "$(grep -c 'ls-remote --exit-code "\$HEAD_URL"' "$SCRIPT" || true)" \
+   '원격 브랜치를 push URL 로 조회한다'
+
+# 삼각 워크플로: fetch 와 push URL 이 다르면 push 쪽을 봐야 한다.
+fresh
+git remote set-url --push origin "$R/me/work"
+git remote set-url origin "$R/me/work"     # fetch 도 같게 두고 정상 경로 확인
+out=$(run); rc=$?
+r 0 "$rc" 'push URL 로 조회해도 정상 경로가 돈다'
+r "" "$(git ls-remote --heads "$R/me/work" feature/x)" '원격 브랜치가 지워졌다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

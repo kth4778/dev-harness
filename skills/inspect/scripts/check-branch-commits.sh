@@ -106,6 +106,10 @@ if [ -n "$HEAD_OWNER" ]; then
     UPSTREAM=$(gh_out gh repo view --json parent,nameWithOwner \
       -q '.parent.nameWithOwner // .nameWithOwner') \
       || { bad "gh 로 저장소를 못 읽었다(인증·네트워크). 재사용 검사를 통과로 두지 않는다"; exit 1; }
+    # 호스트 대조에 쓸 URL 도 함께 받는다. 실패해도 막지 않는다 — 없으면 아래에서
+    # 호스트 대조를 건너뛴다.
+    UPSTREAM_URL=$(gh_out gh repo view --json parent,url \
+      -q '.parent.url // .url' 2>/dev/null) || UPSTREAM_URL=
 fi
 if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
@@ -147,12 +151,28 @@ nwo_of() {
       | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
       | awk -F/ 'NF>=2 {print tolower($(NF-1) "/" $NF)}'
 }
+# 호스트도 본다. NWO 만 맞추면 GitHub 원본과 사내 미러가 같아 보여, gh 가 확인한
+# 저장소가 아닌 **미러의 base 를 fetch** 한다 — 관계없는 merge-base 로 커밋을
+# 세거나 unrelated-history 로 Phase 5 가 막힌다 (codex, PR #63).
+# merge-cleanup 에는 앞 라운드에 넣었고 여기를 빠뜨렸다. 같은 실수가 두 번째다.
+host_of() {
+    local u="$1" h
+    case "$u" in
+        *://*)  h=$(printf '%s' "$u" | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#/.*$##') ;;
+        *)      h=$(printf '%s' "$u" | sed -E 's#^[^@]*@##; s#[:/].*$##') ;;
+    esac
+    printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+}
 BASE_REMOTE=
 if [ -n "$UPSTREAM" ]; then
     want_up=$(printf '%s' "$UPSTREAM" | tr '[:upper:]' '[:lower:]')
+    want_host=$(host_of "$UPSTREAM_URL")
     for rmt in $(git remote); do
-        [ "$(nwo_of "$(git remote get-url "$rmt" 2>/dev/null)")" = "$want_up" ] \
-            && { BASE_REMOTE="$rmt"; break; }
+        u=$(git remote get-url "$rmt" 2>/dev/null) || continue
+        [ "$(nwo_of "$u")" = "$want_up" ] || continue
+        # 한쪽 호스트가 비면(로컬 경로 원격) 대조할 것이 없다.
+        [ -z "$want_host" ] || [ "$(host_of "$u")" = "$want_host" ] || continue
+        BASE_REMOTE="$rmt"; break
     done
 fi
 [ -n "$BASE_REMOTE" ] \
@@ -281,22 +301,34 @@ while read -r sha subject; do
         #
         # `head -1` 을 쓰지 않는다 — 앞의 grep 이 SIGPIPE 로 죽는다. awk 는
         # 스트림을 끝까지 읽으므로 안전하다.
-        touched_test=0
+        # 테스트 영역과 **구현 영역**을 각각 건드렸는지 따로 센다.
+        #
+        # 「새 테스트 표식이 있으면 통과」로 두면, 기존 구현 파일에 테스트 블록만
+        # 붙인 `test:` 커밋이 그대로 통과한다 — 이 스크립트가 막으려는 바로 그
+        # 테스트-only 커밋이다 (codex, PR #63). 구현도 함께 바뀌어야 통과다.
+        touched_test=0; touched_src=0
         while IFS= read -r f; do
             [ -n "$f" ] || continue
+            lines=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
+                      | sed -nE 's/^@@ -[0-9,]+ \+([0-9]+).*/\1/p' | sort -n)
+            [ -n "$lines" ] || continue
             tstart=$(git show "$sha:$f" 2>/dev/null \
                        | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
-            [ -n "$tstart" ] || continue
-            # 이 파일 hunk 들의 시작 줄 중 가장 큰 것.
-            last=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
-                     | sed -nE 's/^@@ -[0-9,]+ \+([0-9]+).*/\1/p' | sort -n | tail -1)
-            [ -n "$last" ] || continue
-            [ "$last" -ge "$tstart" ] && { touched_test=1; break; }
+            if [ -z "$tstart" ]; then
+                # 테스트 표식이 없는 파일 — 전부 구현이다.
+                touched_src=1
+                continue
+            fi
+            lo=$(printf '%s\n' "$lines" | awk 'NR==1{print}')
+            hi=$(printf '%s\n' "$lines" | tail -1)
+            [ "$hi" -ge "$tstart" ] && touched_test=1
+            [ "$lo" -lt "$tstart" ] && touched_src=1
         done <<FILEEOF
 $files
 FILEEOF
-        # 새 테스트를 넣었거나, 테스트 영역을 건드렸으면 통과.
-        if [ "$added_test" -gt 0 ] || [ "$touched_test" = 1 ]; then
+        # 구현을 건드렸고, 테스트도 함께 건드렸으면 통과.
+        if [ "$touched_src" = 1 ] \
+           && { [ "$added_test" -gt 0 ] || [ "$touched_test" = 1 ]; }; then
             continue
         fi
     fi
