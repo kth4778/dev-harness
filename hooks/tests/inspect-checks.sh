@@ -275,7 +275,8 @@ printf 'fn f()->i32{1}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } 
 git add .; git commit -qm "feat: 처음"
 printf 'fn f()->i32{2}\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } }\n' > src/lib.rs
 git add .; git commit -qm "feat: 구현만 고친다"
-r 1 "$(out_of >/dev/null 2>&1; echo $?)" '옛 테스트가 남아 있어도 구현만 고치면 걸린다'
+printf '%s' "$(out_of)" | grep -q "눈으로 확인한다" \
+  && r y y '옛 테스트가 남은 구현 커밋을 목록에 올린다' || r y n '옛 테스트가 남은 구현 커밋을 목록에 올린다'
 
 # 반대 갈래 — 같은 커밋에서 단언도 고쳤으면 통과해야 한다.
 fresh; git switch -qc feature/bothchanged
@@ -306,7 +307,8 @@ git add .; git commit -qm "feat: 처음"
   printf '#[cfg(test)]\n'
   printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(f(1),1); } }\n'; } > src/lib.rs
 git add .; git commit -qm "feat: 운영 코드에 단언만 넣는다"
-r 1 "$(out_of >/dev/null 2>&1; echo $?)" '운영 코드의 단언을 테스트 변경으로 세지 않는다'
+printf '%s' "$(out_of)" | grep -q "눈으로 확인한다" \
+  && r y y '운영 코드만 고친 colocated 커밋을 목록에 올린다' || r y n '운영 코드만 고친 colocated 커밋을 목록에 올린다'
 
 # 반대 갈래 — 테스트 영역을 고쳤으면 통과해야 한다.
 fresh; git switch -qc feature/testarea
@@ -372,7 +374,8 @@ git switch -qc feature/testonlyinline
   printf '#[cfg(test)]\n'
   printf 'mod t{ #[test] fn a(){ assert_eq!(1,1); } }\n'; } > src/lib.rs
 git add .; git commit -qm "test: 테스트 블록만 붙인다"
-r 1 "$(out_of >/dev/null 2>&1; echo $?)" '인라인 테스트만 추가한 커밋을 통과시키지 않는다'
+printf '%s' "$(out_of)" | grep -q "눈으로 확인한다" \
+  && r y y '인라인 테스트만 추가한 커밋도 목록에 올린다' || r y n '인라인 테스트만 추가한 커밋도 목록에 올린다'
 
 # 반대 갈래 — 구현도 함께 바뀌면 통과한다.
 fresh
@@ -416,7 +419,8 @@ git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
 git switch -qc feature/droptest
 printf 'fn keep()->i32{1}\n' > src/lib.rs      # 구현은 그대로, 테스트만 지운다
 git add .; git commit -qm "test: 테스트 블록만 걷어낸다"
-r 1 "$(out_of >/dev/null 2>&1; echo $?)" '마지막 인라인 테스트만 지운 커밋을 통과시키지 않는다'
+printf '%s' "$(out_of)" | grep -q "눈으로 확인한다" \
+  && r y y '마지막 인라인 테스트만 지운 커밋도 목록에 올린다' || r y n '마지막 인라인 테스트만 지운 커밋도 목록에 올린다'
 
 # fork 인데 upstream 원격이 없으면 fork 의 origin 으로 떨어지지 않는다.
 fresh; git switch -qc feature/forkNoUp

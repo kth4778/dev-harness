@@ -81,6 +81,10 @@ case "$2" in
     esac
     exit "${GH_VIEW_RC:-0}" ;;
   merge)
+    # 브랜치 보호(선형 이력)가 특정 전략만 거부하는 상황.
+    if [ -n "${GH_REJECT_STRAT:-}" ]; then
+      case "$*" in *"$GH_REJECT_STRAT"*) exit 1 ;; esac
+    fi
     exit "${GH_MERGE_RC:-0}" ;;
 esac
 GH
@@ -467,6 +471,33 @@ r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
    'status 를 파이프로만 세지 않는다'
 r 1 "$(grep -c 'die "작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
    'status 조회 실패를 멈춤으로 다룬다'
+
+echo "── codex 지적 (PR #69) ──"
+# 저장소 설정이 열려 있어도 base 브랜치 보호가 특정 전략을 거부할 수 있다.
+# 그때 허용된 다른 전략으로 다시 넣어야 Phase 6 이 안 멈춘다.
+fresh
+git remote set-url --push origin "$R/me/work"
+out=$(GH_REJECT_STRAT=--merge run); rc=$?
+r 0 "$rc" '보호 규칙이 --merge 를 거부하면 다른 전략으로 넣는다'
+printf '%s' "$out" | grep -q "다시 넣는다" \
+  && r y y '무엇으로 갈아탔는지 알린다' || r y n '무엇으로 갈아탔는지 알린다'
+r "" "$(git branch --list feature/x)" '그래도 정리까지 끝난다'
+
+# 전부 거부되면 멈춘다.
+fresh
+git remote set-url --push origin "$R/me/work"
+out=$(GH_MERGE_RC=1 run); rc=$?
+r 1 "$rc" '어느 전략으로도 안 되면 멈춘다'
+
+# worktree 조회 자체가 실패하면 「없음」으로 읽지 않는다.
+r 1 "$(grep -c 'die "worktree 목록을 못 읽었다' "$SCRIPT" || true)" \
+   'worktree 조회 실패를 멈춤으로 다룬다'
+
+# 시한 초과 때 자식까지 죽인다 — git 이 띄운 ssh 가 남으면 안 된다.
+r 1 "$(grep -c 'kill -TERM "-\$pid"' "$SCRIPT" || true)" \
+   '프로세스 그룹 전체에 TERM 을 보낸다'
+r 1 "$(grep -c 'kill -KILL "-\$pid"' "$SCRIPT" || true)" \
+   '프로세스 그룹 전체에 KILL 을 보낸다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

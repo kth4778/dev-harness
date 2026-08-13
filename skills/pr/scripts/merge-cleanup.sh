@@ -15,7 +15,13 @@ PR="${1:?PR 번호를 넘겨라}"
 bounded() {
     local secs="$1"; shift
     local pid n=0
+    # **프로세스 그룹으로 띄운다.** 부모 PID 만 죽이면 git 이 띄운 ssh·전송
+    # helper 가 남아, 시한이 지난 뒤에도 원격을 계속 바꾼다 — 스크립트의 실패
+    # 보고와 실제 상태가 갈린다 (codex, PR #69).
+    # `set -m` 을 켜면 자식이 자기 그룹의 리더가 되어 `kill -그룹` 이 닿는다.
+    set -m
     "$@" & pid=$!
+    set +m
     # 1 초 간격으로 재면 즉시 끝나는 명령도 **매번 1 초를 버린다.** 정리 한 번에
     # 이 함수를 여러 번 부르고 시험은 스크립트를 반복 실행하므로, 시험 전체가
     # 몇 분 멈춘 것처럼 보였다 (codex, PR #59). 0.05 초로 잰다.
@@ -24,9 +30,10 @@ bounded() {
     if kill -0 "$pid" 2>/dev/null; then
         # TERM 을 무시하는 프로세스가 있다. 유예를 준 뒤 KILL 로 올린다 —
         # 안 그러면 뒤의 wait 가 시한 없이 붙잡혀 이 함수가 무의미해진다.
-        kill -TERM "$pid" 2>/dev/null
+        # 그룹 전체에 보낸다(음수 PID). 그룹이 없으면 프로세스 하나로 떨어진다.
+        kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
         n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.05; n=$((n+1)); done
-        kill -KILL "$pid" 2>/dev/null
+        kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
         wait "$pid" 2>/dev/null
         return 124                       # 시한 초과
     fi
@@ -359,8 +366,32 @@ fi
 # 우회되고, 로컬 재검증은 지워진 ref 를 재느라 **정상 실행이 매번 실패로 끝난다.**
 # 그러면 뒤따르는 위키 반영·티켓 정리도 멈춘다 (codex, PR #57).
 # 삭제는 전부 아래의 검증된 절차가 한다.
-bounded 60 gh pr merge "$PR" -R "$API_HOST/$API_NWO" "$STRAT" --match-head-commit "$REVIEWED" \
-    || die "머지 요청이 실패했다. 인증·권한·체크, 그리고 리뷰 뒤 push 가 있었는지 확인한다"
+# 저장소 설정이 열려 있어도 **base 브랜치 보호 규칙**이 막을 수 있다 —
+# 「Require linear history」가 켜져 있으면 merge commit 이 거부된다. 그 규칙은
+# 위에서 읽은 저장소 설정에 안 나오므로, 거부되면 **허용된 다른 전략으로
+# 한 번 더** 시도한다 (codex, PR #69). 그러지 않으면 rebase 가 열려 있어도
+# Phase 6 이 통째로 멈춘다.
+try_merge() {
+    bounded 60 gh pr merge "$PR" -R "$API_HOST/$API_NWO" "$1" \
+        --match-head-commit "$REVIEWED"
+}
+if ! try_merge "$STRAT"; then
+    MERGED_OK=0
+    for alt in --rebase --squash --merge; do
+        [ "$alt" = "$STRAT" ] && continue
+        case "$alt" in
+            --rebase) [ "$R_OK" = "true" ] || continue ;;
+            --squash) [ "$S_OK" = "true" ] || continue ;;
+            --merge)  [ "$M_OK" = "true" ] || continue ;;
+        esac
+        printf '  %s 가 거부됐다(브랜치 보호로 보인다). %s 로 다시 넣는다\n' \
+            "$STRAT" "$alt" >&2
+        if try_merge "$alt"; then MERGED_OK=1; STRAT="$alt"; break; fi
+    done
+    [ "$MERGED_OK" = 1 ] \
+        || die "머지 요청이 실패했다. 인증·권한·체크·브랜치 보호 규칙, 그리고
+       리뷰 뒤 push 가 있었는지 확인한다"
+fi
 
 # ── 머지가 **실제로** 끝났는지 본다 ─────────────────────────────
 # 명령이 성공해도 큐에 넣기만 했거나 auto-merge 를 켜 둔 것일 수 있다.
@@ -418,7 +449,16 @@ fi
 # **부분 정리 상태**가 됐고, 다시 불러도 원격이 없어 복구가 안 됐다
 # (codex, PR #64). 하나라도 못 지울 상황이면 아무것도 안 지운다.
 # (`grep -c` 를 쓴다 — `-q` 는 파이프에서 SIGPIPE 를 부른다.)
-if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || true)" -gt 0 ]; then
+# 조회 **실패**와 「일치 없음」을 가른다. `| grep -c … || true` 로만 쓰면 조회가
+# 죽어도 0 이 되어, 다른 worktree 가 쓰고 있는데도 지나간다 — `update-ref -d` 는
+# `git branch -D` 가 하던 worktree 보호를 안 하므로 그 worktree 가 unborn 이
+# 된다 (codex, PR #69). 이 세션에서 「실패 삼킴」을 또 밟았다.
+WT_OUT=$(mktemp)
+git worktree list --porcelain > "$WT_OUT" 2>/dev/null \
+    || { rm -f "$WT_OUT"; die "worktree 목록을 못 읽었다. 지우지 않는다"; }
+WT_HIT=$(grep -cFx "branch refs/heads/$BR" "$WT_OUT" || true)
+rm -f "$WT_OUT"
+if [ "$WT_HIT" -gt 0 ]; then
     die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
 fi
 

@@ -120,16 +120,23 @@ fi
 bounded() {
     local secs="$1"; shift
     local pid n=0
+    # **프로세스 그룹으로 띄운다.** 부모 PID 만 죽이면 git 이 띄운 ssh·전송
+    # helper 가 남아, 시한이 지난 뒤에도 원격을 계속 바꾼다 — 스크립트의 실패
+    # 보고와 실제 상태가 갈린다 (codex, PR #69).
+    # `set -m` 을 켜면 자식이 자기 그룹의 리더가 되어 `kill -그룹` 이 닿는다.
+    set -m
     "$@" & pid=$!
+    set +m
     # 1 초 간격이면 즉시 끝나는 명령도 매번 1 초를 버린다. 시험이 이 스크립트를
     # 40 번 넘게 돌리고 한 번에 bounded 를 여러 차례 부르므로 그것이 쌓인다
     # (codex, PR #62 — merge-cleanup 은 앞 라운드에 같은 이유로 고쳤다).
     local limit=$(( secs * 20 ))
     while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$limit" ]; do sleep 0.05; n=$((n+1)); done
     if kill -0 "$pid" 2>/dev/null; then
-        kill -TERM "$pid" 2>/dev/null
+        # 그룹 전체에 보낸다(음수 PID). 그룹이 없으면 프로세스 하나로 떨어진다.
+        kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
         n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.05; n=$((n+1)); done
-        kill -KILL "$pid" 2>/dev/null
+        kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
         wait "$pid" 2>/dev/null
         return 124
     fi
@@ -279,6 +286,8 @@ TESTPAT='(^|/)(test|tests|spec|specs|__tests__)/|(^|/)(test|spec)[._-][^/]*$|(^|
 # 결과를 **파일로** 받는다. `while` 을 파이프 뒤에 두면 서브셸이라 거기서 세운
 # 값이 밖으로 안 나온다 — 그래서 갈라진 커밋을 찍고도 exit 0 이었다.
 SPLIT=$(mktemp)
+# 구현 파일 안에 테스트를 둔 커밋 — **막지 않고 사람에게 넘긴다.**
+COLOCATED=$(mktemp)
 # 문서·설정만 바뀐 커밋
 # `.txt` 는 빼 둔다 — 문서일 수도 데이터·소스일 수도 있어서 예외로 두면
 # 실제 구현 커밋이 조용히 통과한다.
@@ -356,88 +365,50 @@ DELFILEEOF
     fi
     del_src=$(printf '%s\n' "$del_only" | grep -vE "$TESTPAT" \
                 | grep -vE "$DOCPAT" | grep -c . || true)
-    # 구현과 테스트를 함께 지운 커밋은 여기서 통과시킨다.
-    [ "$has_test" = 0 ] && [ "$del_test" -gt 0 ] && [ "$del_src" -gt 0 ] && continue
     # 구현 수에서 **문서를 뺀다.** 안 빼면 테스트와 README 만 고친 커밋이
     # 「구현도 있다」로 읽혀 그대로 통과한다 (codex, PR #58).
     has_src=$(printf '%s\n' "$files_all" | grep -vE "$TESTPAT" \
                 | grep -vE "$DOCPAT" | grep -c . || true)
+
+    # 구현과 테스트를 **함께 지운** 것은 정상이다. 다만 그것으로 커밋 **전체**를
+    # 면제하면 안 된다 — 같은 커밋에서 다른 운영 파일을 테스트 없이 고쳐도
+    # 통과했다 (codex, PR #69 가 재현). 지운 짝만 양쪽 수에서 뺀다.
+    if [ "$del_test" -gt 0 ] && [ "$del_src" -gt 0 ]; then
+        has_src=$(( has_src - del_src ))
+        [ "$has_src" -lt 0 ] && has_src=0
+        # 남은 것이 없으면 이 커밋은 「함께 지운」 것이 전부다.
+        [ "$has_src" -eq 0 ] && continue
+    fi
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
 
-    # 경로로 못 가리는 관례가 있다 — 구현 파일 안에 테스트를 같이 두는 언어.
-    # 추가된 줄에 테스트 표식이 있으면 함께 있는 것으로 본다.
-    # `grep -q` 를 쓰면 안 된다. 매치하자마자 닫혀 앞의 grep 이 SIGPIPE 로 죽고
-    # `set -o pipefail` 이 그것을 파이프라인 실패로 읽어 **이 예외가 통째로
-    # 안 걸린다.** 이 세션에서 같은 실수를 여섯 번째 한다.
+    # ── 구현 파일 안에 테스트를 같이 두는 관례(Rust·Go·JS) ──────────
     #
-    # 표식이 **새로 추가된 줄**에만 있으면 기존 테스트의 단언을 고친 커밋이 걸린다.
+    # **판정하지 않는다. 사람에게 넘긴다.**
     #
-    # 그렇다고 「파일이 테스트를 품고 있다」만 보면 반대로 뚫린다 — 구현만 고쳐도
-    # 옛 `#[cfg(test)]` 가 파일에 남아 있어 통과했다 (codex, PR #59).
-    # **이번 커밋에서 테스트 영역도 실제로 바뀌었는지**를 함께 본다.
-    # (`grep -q` 를 쓰지 않는다 — 위와 같은 이유다.)
-    if [ "$has_test" = 0 ]; then
-        added_test=$(git show --format= -U0 "$sha" | grep '^+' \
-                       | grep -cE "$INLINE_TEST" || true)
-        # 「단언이 어디선가 바뀌었다」로 재면 운영 코드에 `assert!` 한 줄만 넣어도
-        # 통과한다 (codex, PR #60). **그 변경 줄이 테스트 영역에 있는지** 본다.
-        #
-        # 테스트 영역은 파일에서 테스트 표식이 처음 나오는 줄부터다 — Rust 의
-        # `#[cfg(test)] mod tests`, JS 의 `describe(` 가 그 자리다. 그 줄 이후를
-        # 건드렸으면 테스트를 고친 것이고, 그 앞만 건드렸으면 구현만 고친 것이다.
-        #
-        # `head -1` 을 쓰지 않는다 — 앞의 grep 이 SIGPIPE 로 죽는다. awk 는
-        # 스트림을 끝까지 읽으므로 안전하다.
-        # 테스트 영역과 **구현 영역**을 각각 건드렸는지 따로 센다.
-        #
-        # 「새 테스트 표식이 있으면 통과」로 두면, 기존 구현 파일에 테스트 블록만
-        # 붙인 `test:` 커밋이 그대로 통과한다 — 이 스크립트가 막으려는 바로 그
-        # 테스트-only 커밋이다 (codex, PR #63). 구현도 함께 바뀌어야 통과다.
-        touched_test=0; touched_src=0
+    # 세 번 고쳤고 세 번 뚫렸다. 추가된 줄의 표식만 보면 기존 테스트를 고친
+    # 커밋이 걸리고(PR #56), 파일이 테스트를 품었는지만 보면 구현만 고쳐도
+    # 통과하고(PR #59), 첫 표식의 줄 번호를 경계로 삼으면 **그 뒤에 있는 운영
+    # 코드까지 테스트로 세어진다**(PR #69 — codex 가 재현했다).
+    #
+    # 정확히 가르려면 블록의 중괄호를 세야 하는데 셸로 할 일이 아니다.
+    # 대신 `test-coverage-notice` 훅과 같은 길을 간다 — **막지 않고 알린다.**
+    # 조용히 통과하는 것과 목록에 찍히는 것은 다르다.
+    if [ "$has_test" = 0 ] && [ "$has_src" -gt 0 ]; then
+        inline=0
         while IFS= read -r f; do
             [ -n "$f" ] || continue
-            lines=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
-                      | sed -nE 's/^@@ -[0-9,]+ \+([0-9]+).*/\1/p' | sort -n)
-            [ -n "$lines" ] || continue
-            # **지워진 줄에 테스트 표식이 있으면 테스트를 건드린 것이다.**
-            # 경계를 커밋 이후 파일에서만 찾으면, 구현과 인라인 테스트를 함께
-            # 걷어낸 정상 커밋이 「구현만」으로 오판된다 (codex, PR #64).
-            gone_test=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
-                          | grep '^-' | grep -cE "$INLINE_TEST" || true)
-            [ "$gone_test" -gt 0 ] && touched_test=1
-
-            tstart=$(git show "$sha:$f" 2>/dev/null \
-                       | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
-            if [ -z "$tstart" ]; then
-                if [ "$gone_test" -gt 0 ]; then
-                    # 테스트 표식을 **지운** 커밋이다. 여기서 무조건 구현도
-                    # 바꿨다고 치면, 마지막 테스트 블록만 걷어낸 test-only 커밋이
-                    # 통과한다 (codex, PR #65). **부모 쪽 경계**로 다시 잰다.
-                    ptstart=$(git show "$sha^:$f" 2>/dev/null \
-                                | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
-                    if [ -n "$ptstart" ]; then
-                        # hunk 헤더의 **- 쪽** 줄 번호가 부모 기준 위치다.
-                        plo=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
-                                | sed -nE 's/^@@ -([0-9]+).*/\1/p' | sort -n \
-                                | awk 'NR==1{print}')
-                        [ -n "$plo" ] && [ "$plo" -lt "$ptstart" ] && touched_src=1
-                        continue
-                    fi
-                fi
-                # 테스트 표식이 애초에 없던 파일 — 전부 구현이다.
-                touched_src=1
-                continue
-            fi
-            lo=$(printf '%s\n' "$lines" | awk 'NR==1{print}')
-            hi=$(printf '%s\n' "$lines" | tail -1)
-            [ "$hi" -ge "$tstart" ] && touched_test=1
-            [ "$lo" -lt "$tstart" ] && touched_src=1
+            n=$(git show "$sha:$f" 2>/dev/null | grep -cE "$INLINE_TEST" || true)
+            [ "${n:-0}" -gt 0 ] && { inline=1; break; }
+            # 이 커밋에서 **지워진** 표식도 colocated 신호다 — 구현과 인라인
+            # 테스트를 함께 걷어낸 커밋은 커밋 뒤 파일에 표식이 안 남는다.
+            g=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
+                  | grep '^-' | grep -cE "$INLINE_TEST" || true)
+            [ "${g:-0}" -gt 0 ] && { inline=1; break; }
         done <<FILEEOF
 $files
 FILEEOF
-        # 구현을 건드렸고, 테스트도 함께 건드렸으면 통과.
-        if [ "$touched_src" = 1 ] \
-           && { [ "$added_test" -gt 0 ] || [ "$touched_test" = 1 ]; }; then
+        if [ "$inline" = 1 ]; then
+            printf '  %s %s\n' "${sha:0:8}" "$subject" >> "$COLOCATED"
             continue
         fi
     fi
@@ -451,6 +422,15 @@ if [ -s "$SPLIT" ]; then
     bad "구현만·테스트만 있는 커밋이 있다 — 하나로 합친다(규칙 2)"
 fi
 rm "$SPLIT" 2>/dev/null
+
+# **FAIL 이 아니다.** 기계가 가를 수 없는 자리라 사람에게 넘긴다.
+# 조용히 통과하는 것과 목록에 찍히는 것은 다르다.
+if [ -s "$COLOCATED" ]; then
+    printf '  구현 파일 안에 테스트를 둔 커밋 — 눈으로 확인한다:\n' >&2
+    cat "$COLOCATED" >&2
+    printf '    (구현과 테스트가 같은 커밋에 들어 있는지 본다. 규칙 2)\n' >&2
+fi
+rm "$COLOCATED" 2>/dev/null
 
 # 같은 파일을 세 번 이상 건드린 커밋들 — 한 자리를 여러 번 고쳤다는 신호.
 printf '\n같은 파일을 반복해 건드린 횟수:\n'
