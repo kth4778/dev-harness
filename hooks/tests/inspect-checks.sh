@@ -202,6 +202,30 @@ printf 'fn f(){ }\n#[cfg(test)]\nmod t{ #[test] fn a(){ assert_eq!(1,1); } }\n' 
 git add .; git commit -qm "fix: 단언만 고친다"
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" '기존 테스트의 단언만 고친 커밋도 예외'
 
+echo "── codex 지적 (PR #58) ──"
+# 유일한 테스트를 **지운** 커밋이 「테스트가 함께 있다」로 통과하면 안 된다.
+fresh; git switch -qc feature/deltest
+mkdir -p src tests
+printf 'def f(): pass\n'      > src/app.py
+printf 'def test_f(): pass\n' > tests/test_app.py
+git add .; git commit -qm "feat: 처음"
+printf 'def f(): return 1\n' > src/app.py
+git rm -q tests/test_app.py; git add .
+git commit -qm "feat: 구현을 고치면서 테스트를 지운다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '테스트를 지운 커밋을 통과시키지 않는다'
+
+# 문서를 「구현」으로 세면 테스트만 고친 커밋이 「구현도 있다」로 통과한다.
+# 구현이 없으므로 걸려야 맞다.
+fresh; git switch -qc feature/docsrc
+mkdir -p src tests
+printf 'def f(): pass\n'      > src/app.py
+printf 'def test_f(): pass\n' > tests/test_app.py
+git add .; git commit -qm "feat: 처음"
+printf 'def test_f(): assert True\n' > tests/test_app.py
+printf '# 설명\n'                    > README.md
+git add .; git commit -qm "test: 단언을 채우고 설명을 적는다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '테스트+문서만 바뀐 커밋을 통과시키지 않는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

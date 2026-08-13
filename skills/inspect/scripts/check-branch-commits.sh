@@ -189,7 +189,9 @@ while read -r sha subject; do
     [ -n "$sha" ] || continue
     case "$subject" in refactor:*|refactor\(*|chore:*|chore\(*) continue ;; esac
 
-    files=$(git show --name-only --format= "$sha")
+    # `--diff-filter=d` — 삭제된 경로를 뺀다. 안 빼면 유일한 테스트 파일을
+    # **지운** 커밋이 「테스트가 함께 있다」로 통과한다 (codex, PR #58).
+    files=$(git show --name-only --format= --diff-filter=d "$sha")
     [ -n "$files" ] || continue
 
     # 문서 예외는 **경로**로 본다. 제목만 보면 `docs(readme):` 나
@@ -203,7 +205,10 @@ while read -r sha subject; do
     [ "$nondoc" -gt 0 ] || continue
 
     has_test=$(printf '%s\n' "$files" | grep -cE "$TESTPAT" || true)
-    has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" | grep -c . || true)
+    # 구현 수에서 **문서를 뺀다.** 안 빼면 테스트와 README 만 고친 커밋이
+    # 「구현도 있다」로 읽혀 그대로 통과한다 (codex, PR #58).
+    has_src=$(printf '%s\n' "$files"  | grep -vE "$TESTPAT" \
+                | grep -vE "$DOCPAT" | grep -c . || true)
     [ "$has_test" -gt 0 ] && [ "$has_src" -gt 0 ] && continue
 
     # 경로로 못 가리는 관례가 있다 — 구현 파일 안에 테스트를 같이 두는 언어.

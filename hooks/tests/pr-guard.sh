@@ -62,6 +62,37 @@ r 2 "$(feed "\"printf '사람 리뷰' > $TMPB/bot.txt; gh pr comment 57 --body-f
    '같은 줄에서 파일을 덮어써도 못 뚫는다'
 rm -rf "$TMPB"
 
+echo "── 우회 시도 (PR #58 봇 지적) ──"
+# codex: 닫는 따옴표 뒤에 문자를 이으면 셸은 이어 붙이는데, 옛 판정은 닫는
+# 따옴표 뒤를 버려서 통과시켰다.
+r 2 "$(feed $'"gh pr comment 58 --body \'@codex review 한국어로\'그리고이건리뷰"')" \
+   '인용 뒤에 문자를 이으면 막는다'
+
+# claude: --body 를 두 번 쓰면 greedy 매치가 뒤쪽만 읽어, 실제 전송되는 앞쪽
+# 사람 리뷰를 못 봤다.
+r 2 "$(feed $'"gh pr comment 58 --body \\"이렇게 쓰면 된다: --body \'@codex review\'\\""')" \
+   '--body 를 두 번 써도 못 뚫는다'
+
+# 뒤에 다른 명령을 잇는 형태. 이제 명령줄 전체를 대조하므로 형태가 안 맞는다.
+r 2 "$(feed $'"gh pr comment 58 --body \'@codex review\' && echo 끝"')" \
+   '뒤에 다른 명령이 붙으면 막는다'
+r 2 "$(feed $'"echo 시작; gh pr comment 58 --body \'@codex review\'"')" \
+   '앞에 다른 명령이 붙으면 막는다'
+
+# 여는 것과 닫는 것이 다른 인용.
+r 2 "$(feed $'"gh pr comment 58 --body \'@codex review\\""')" \
+   '인용이 어긋나면 막는다'
+
+# cd 자리에 명령을 숨기는 것.
+r 2 "$(feed $'"cd $(echo /tmp) && gh pr comment 58 --body \'@codex review\'"')" \
+   'cd 경로에 치환을 숨기면 막는다'
+
+# 통과해야 할 것이 여전히 통과하는지. 좁히면 거짓 차단이 늘어난다.
+r 0 "$(feed $'"gh pr comment 58 --body \'@claude review 한국어로\'"')" \
+   '봇 호출은 그대로 통과한다'
+r 0 "$(feed $'"gh pr comment 58 -b \\"@codex review\\""')" \
+   '-b 짧은 형태도 통과한다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

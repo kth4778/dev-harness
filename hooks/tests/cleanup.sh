@@ -231,8 +231,15 @@ r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c -- '--delete-branch' || true
    '머지 호출에 --delete-branch 를 쓰지 않는다'
 
 # 원격 삭제는 리뷰된 SHA 에 lease 로 묶는다 — 조회와 삭제 사이의 push 를 막는다.
-r 1 "$(grep -c 'force-with-lease' "$SCRIPT" || true)" \
+r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'force-with-lease' || true)" \
    '원격 삭제를 리뷰된 SHA 에 lease 로 묶는다'
+
+# 로컬 삭제는 `git branch -D` 가 아니라 `update-ref -d <ref> <옛값>` 이어야
+# 대조와 삭제가 한 동작이 된다. 명령줄만 본다(주석은 세지 않는다).
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'git branch -D' || true)" \
+   '로컬 삭제에 git branch -D 를 쓰지 않는다'
+r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'update-ref -d' || true)" \
+   '로컬 삭제를 리뷰된 SHA 에 원자적으로 묶는다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

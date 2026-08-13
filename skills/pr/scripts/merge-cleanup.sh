@@ -305,7 +305,11 @@ NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
     || die "로컬 $BR 이 ${NOW_OID:0:8} 로 옮겨졌다(리뷰된 것은 ${REVIEWED:0:8}).
        그 사이 커밋이 얹혔다 — 지우지 않는다"
 
-if ! git branch -D "$BR" 2>/dev/null; then
+# 위 대조와 삭제 **사이**에도 다른 프로세스가 ref 를 옮길 수 있다. `git branch -D`
+# 는 현재 값을 안 보고 지우므로 그 틈이 남는다. `update-ref -d <ref> <옛값>` 은
+# 옛값과 다르면 거부한다 — 대조와 삭제가 한 동작이 된다 (codex, PR #58).
+# 두 갈래를 실측했다: 옛값→종료 1·브랜치 유지, 맞는 값→종료 0·삭제.
+if ! git update-ref -d "refs/heads/$BR" "$REVIEWED" 2>/dev/null; then
     # 정말 없는 것과 지우지 못한 것을 가른다. ref 가 남아 있으면 실패다 —
     # 그대로 「정리 완료」를 찍으면 그 브랜치가 재사용 대상으로 남는다.
     git show-ref --verify -q "refs/heads/$BR" \
