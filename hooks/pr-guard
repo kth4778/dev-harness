@@ -75,7 +75,14 @@ is_bot_trigger() {
     # `cd <경로> &&` 하나까지만 앞에 붙을 수 있다. 경로에 명령 구분자나
     # 치환 문자가 들어가면 거부한다 — 거기로 다른 명령을 숨길 수 있다.
     pre='^[[:space:]]*(cd[[:space:]]+[^;&|<>()`$]+[[:space:]]*&&[[:space:]]*)?'
-    pre="${pre}"'gh[[:space:]]+pr[[:space:]]+comment[[:space:]]+[0-9]+[[:space:]]+(--body|-b)([[:space:]]+|=)'
+    # 대상은 `<번호>|<URL>|<브랜치>` 셋 다 받는다(gh 공식 사용법). 숫자만
+    # 허용했더니 URL 로 부르는 정상 봇 호출이 막혔다 (codex, PR #73).
+    # 대상에는 명령 구분자·치환 문자를 넣을 수 없다.
+    target='[^;&|<>()`$'"'"'"[:space:]]+'
+    # `-R owner/repo` 같은 저장소 지정도 앞뒤로 올 수 있다.
+    repoopt='((-R|--repo)[[:space:]]+'"$target"'[[:space:]]+)?'
+    pre="${pre}"'gh[[:space:]]+pr[[:space:]]+comment[[:space:]]+'
+    pre="${pre}${repoopt}${target}"'[[:space:]]+'"${repoopt}"'(--body|-b)([[:space:]]+|=)'
     # `[[:space:]]` 는 \r 도 받는다. 평범한 빈칸만 허용한다.
     post=' *$'
 
@@ -125,8 +132,12 @@ case "$norm" in
                 # 안의 문자열(`select(.body == " -foo")`)까지 걸려, 읽기만 하는
                 # 조회가 막힌다 (codex, PR #72). 플래그 뒤에는 공백·`=`·
                 # `이름=` 중 하나가 온다.
+                # **인용 구간을 먼저 지운다.** 플래그는 인용 밖에 있고, jq 식
+                # 안의 문자열(`" -foo=bar"`)은 안에 있다. 토큰 경계만으로는
+                # `=` 하나에 다시 오인했다 (codex, PR #73).
+                scan=$(printf '%s' "$norm" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
                 FIELDPAT='(^| )(-[fF]([ =]|[A-Za-z_][A-Za-z0-9_]*=)|--(raw-)?field([ =]|$))'
-                if [ "$(printf '%s' "$norm" | grep -Ec "$FIELDPAT" || true)" -gt 0 ]; then
+                if [ "$(printf '%s' "$scan" | grep -Ec "$FIELDPAT" || true)" -gt 0 ]; then
                     deny "gh api로 리뷰·코멘트 생성"
                 fi
                 case "$norm" in

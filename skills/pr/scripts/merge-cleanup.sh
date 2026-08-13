@@ -42,9 +42,17 @@ bounded() {
 
 # 조회는 실패를 **삼키지 않는다.** cat 의 성공이 bounded 의 실패를 덮으면
 # 호출부가 「아직 안 끝났다」로 오해하고 시한까지 헛돈다.
+# **base 저장소를 먼저 확정한다.** `gh pr view` 는 현재 폴더의 저장소를 보는데,
+# fork 에서 base 원격 이름이 `upstream` 이 아니면 **fork 의 같은 번호**를 조회해
+# 404 나 엉뚱한 head 대조로 Phase 6 이 통째로 막힌다 (codex, PR #73).
+PR_REPO_ARG=$(bounded 30 gh repo view --json parent,nameWithOwner \
+  -q '[(.parent.nameWithOwner // ""), .nameWithOwner] | map(select(. != "")) | .[0]' \
+  2>/dev/null) || PR_REPO_ARG=
+
 gh_json() {
     local out rc; out=$(mktemp)
-    bounded 30 gh pr view "$PR" --json "$1" -q "$2" > "$out" 2>/dev/null; rc=$?
+    bounded 30 gh pr view "$PR" ${PR_REPO_ARG:+-R "$PR_REPO_ARG"} \
+        --json "$1" -q "$2" > "$out" 2>/dev/null; rc=$?
     cat "$out"; rm -f "$out"
     return "$rc"
 }
@@ -491,6 +499,19 @@ fi
 # 검사 하나가 삭제 뒤에 있으면 「원격만 지워진」 부분 정리가 된다. 다시 불러도
 # 원격이 없어 복구가 안 된다 — 이 세션에서 두 번 그렇게 됐다(worktree, 로컬 SHA).
 # **하나라도 어긋나면 아무것도 지우지 않는다.**
+
+# 작업 트리가 아직 깨끗한가. 머지 앞에서 한 번 봤지만 그 뒤 리뷰 조회와 최대
+# 20분의 큐 대기가 있다 — 그 사이 편집기가 파일을 건드리면, 브랜치를 옮길 때
+# **그 변경이 통합 브랜치로 딸려 가거나** detach 로 빠져 브랜치만 지워진다
+# (codex, PR #73). SHA 재검사는 미커밋 변경을 못 잡는다.
+ST2=$(mktemp)
+git status --porcelain > "$ST2" 2>/dev/null \
+    || { rm -f "$ST2"; die "작업 트리 상태를 못 읽었다. 지우지 않는다"; }
+DIRTY2=$(grep -c . "$ST2" || true)
+rm -f "$ST2"
+[ "$DIRTY2" -eq 0 ] \
+    || die "머지 뒤에 작업 트리가 더러워졌다($DIRTY2 개). 지우지 않는다 —
+       머지는 끝났으니 정리하고 다시 부른다:  git status --short"
 
 # 로컬이 옮겨졌나. 큐를 기다린 20분 사이에 다른 터미널이 커밋을 얹었을 수 있다.
 NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)

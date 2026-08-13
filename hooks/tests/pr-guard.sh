@@ -143,6 +143,35 @@ r 0 "$(feed $'"gh api repos/o/r/pulls/1/reviews -q \'.[] | .body\'"')" \
 r 2 "$(feed $'"gh api repos/o/r/issues/1/comments -f body=x"')" \
    '소문자 단축형은 여전히 막는다'
 
+echo "── 대상 형식 (PR #73 봇 지적) ──"
+# gh 공식 사용법은 `<번호>|<URL>|<브랜치>` 셋 다 받는다. 숫자만 허용했더니
+# URL 로 부르는 정상 봇 호출이 막혔다.
+r 0 "$(feed $'"gh pr comment https://github.com/o/r/pull/57 --body \'@codex review 한국어로\'"')" \
+   'URL 대상으로도 봇을 부를 수 있다'
+r 0 "$(feed $'"gh pr comment feature/x --body \'@claude review\'"')" \
+   '브랜치 이름 대상도 통과한다'
+r 0 "$(feed $'"gh pr comment -R o/r 57 --body \'@codex review\'"')" \
+   '-R 로 저장소를 짚어도 통과한다'
+r 0 "$(feed $'"gh pr comment 57 --repo o/r --body \'@codex review\'"')" \
+   '--repo 가 뒤에 와도 통과한다'
+
+# 대상이 넓어졌다고 본문 검사가 헐거워지면 안 된다.
+r 2 "$(feed $'"gh pr comment https://github.com/o/r/pull/57 --body \'사람 리뷰\'"')" \
+   'URL 대상이어도 리뷰 내용은 막는다'
+r 2 "$(feed $'"gh pr comment -R o/r 57 --body \'사람 리뷰\'"')" \
+   '-R 이 붙어도 리뷰 내용은 막는다'
+# 대상 자리에 명령을 숨길 수 없다.
+r 2 "$(feed $'"gh pr comment $(echo 57) --body \'@codex review\'"')" \
+   '대상 자리에 치환을 숨기면 막는다'
+
+echo "── 거짓 차단 (PR #73 봇 지적) ──"
+# jq 식 안의 `-foo=bar` 는 필드 플래그가 아니다.
+r 0 "$(feed $'"gh api repos/o/r/issues/1/comments --jq \'.[] | select(.body == \\" -foo=bar\\")\'"')" \
+   'jq 식 안의 -foo=bar 를 필드 플래그로 오인하지 않는다'
+# 인용 밖의 진짜 플래그는 여전히 잡는다.
+r 2 "$(feed $'"gh api repos/o/r/issues/1/comments -fbody=x"')" \
+   '붙여 쓴 -fbody= 는 여전히 막는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

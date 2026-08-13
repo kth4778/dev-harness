@@ -476,8 +476,11 @@ echo "── codex 지적 (PR #68) ──"
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
          | grep -c 'git status --porcelain 2>/dev/null | grep -c' || true)" \
    'status 를 파이프로만 세지 않는다'
-r 1 "$(grep -c 'die "작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
-   'status 조회 실패를 멈춤으로 다룬다'
+# 머지 **앞뒤로** 두 번 본다 — 큐를 기다리는 20분 사이에 편집기가 건드릴 수 있다.
+r 2 "$(grep -c 'die "작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
+   'status 조회 실패를 두 자리 다 멈춤으로 다룬다'
+r 1 "$(grep -c 'die "머지 뒤에 작업 트리가 더러워졌다' "$SCRIPT" || true)" \
+   '머지 뒤에도 작업 트리를 다시 본다'
 
 echo "── codex 지적 (PR #69) ──"
 # 저장소 설정이 열려 있어도 base 브랜치 보호가 특정 전략을 거부할 수 있다.
