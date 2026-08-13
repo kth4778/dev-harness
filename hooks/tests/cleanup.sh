@@ -351,8 +351,12 @@ r 1 "$(grep -c 'merge --ff-only' "$SCRIPT" || true)" \
    'fetch 와 fast-forward 로 나눈다'
 
 # 원격 브랜치 조회는 push URL 로 한다 — 이름은 fetch URL 을 본다.
-r 1 "$(grep -c 'ls-remote --exit-code "\$HEAD_URL"' "$SCRIPT" || true)" \
-   '원격 브랜치를 push URL 로 조회한다'
+# 이제 URL 을 하나씩 돌며 조회한다 — 이름(fetch URL)으로 부르지 않는다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
+         | grep -c 'ls-remote --exit-code "\$HEAD_REMOTE"' || true)" \
+   '원격 브랜치를 이름(fetch URL)으로 조회하지 않는다'
+r 1 "$(grep -c 'ls-remote --exit-code "\$u"' "$SCRIPT" || true)" \
+   '원격 브랜치를 push URL 마다 조회한다'
 
 # 삼각 워크플로: fetch 와 push URL 이 다르면 push 쪽을 봐야 한다.
 fresh
@@ -384,6 +388,34 @@ del_line=$(grep -n 'force-with-lease' "$SCRIPT" | awk -F: 'NR==1{print $1}')
 r y "$([ -n "$wt_line" ] && [ -n "$del_line" ] && [ "$wt_line" -lt "$del_line" ] \
         && echo y || echo n)" \
    'worktree 검사가 원격 삭제보다 앞에 있다'
+
+echo "── codex 지적 (PR #65) ──"
+# push URL 이 둘이고 **둘 다 같은 저장소**면, 둘 다 지워야 「정리 완료」다.
+fresh
+# 경로가 `me/work` 로 끝나야 저장소 대조를 통과한다 — 같은 저장소의 미러다.
+mkdir -p "$R/mirror/me"; git init -q --bare -b main "$R/mirror/me/work"
+git remote set-url --push origin "$R/me/work"
+git remote set-url --add --push origin "$R/mirror/me/work"
+git push -q "$R/mirror/me/work" feature/x 2>/dev/null
+out=$(run); rc=$?
+r 0 "$rc" 'push URL 이 둘이어도 정상 경로가 돈다'
+r 0 "$(git ls-remote --heads "$R/me/work" feature/x | grep -c . || true)" \
+   '첫 원격에서 지워졌다'
+r 0 "$(git ls-remote --heads "$R/mirror/me/work" feature/x | grep -c . || true)" \
+   '두 번째 원격에서도 지워졌다'
+
+# 모든 사전 검사가 원격 삭제보다 앞에 있어야 부분 정리가 안 난다.
+del_line=$(grep -n 'force-with-lease' "$SCRIPT" | awk -F: 'NR==1{print $1}')
+for chk in 'git worktree list' 'NOW_OID=' 'ls-remote --exit-code'; do
+    ln=$(grep -n "$chk" "$SCRIPT" | awk -F: 'NR==1{print $1}')
+    r y "$([ -n "$ln" ] && [ "$ln" -lt "$del_line" ] && echo y || echo n)" \
+       "「$chk」 검사가 원격 삭제보다 앞에 있다"
+done
+
+# 진단에 자격 증명이 실리면 안 된다.
+r 1 "$(grep -c '^redact()' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'die "원격 $u' || true)" \
+   '원본 URL 을 그대로 진단에 싣지 않는다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

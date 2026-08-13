@@ -187,6 +187,11 @@ HEAD_URL=$(printf '%s\n' "$HEAD_URLS" | awk 'NR==1{print}')
 # URL 을 `owner/repo` 로 **정규화해서 정확히** 비교한다. 부분문자열로 보면
 # `me/work` 가 `me/work-backup` 에, `bob/h` 가 `alicebob/h` 에 들어맞아
 # **엉뚱한 원격에서 브랜치를 지운다.**
+# 진단에 URL 을 실을 때는 **자격 증명을 가린다.** `https://user:token@host/...`
+# 형태가 그대로 stderr 에 실리면 훅·시험·CI 로그에 토큰이 남는다 (codex, PR #65).
+redact() {
+    printf '%s' "$1" | sed -E 's#(://)[^@/]*@#\1***@#'
+}
 url_nwo() {
     printf '%s' "$1" \
       | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#^[^:/]*[:/]##; s#/+$##; s#\.git$##' \
@@ -216,7 +221,7 @@ PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # 올바른 base 탐색에 닿기도 전에 멈춘다 (codex, PR #60).
 GH_HOST=$(printf '%s' "$API_HOST" | tr '[:upper:]' '[:lower:]')
 [ "$MY_NWO" = "$PR_NWO" ] \
-    || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($HEAD_URL) 다
+    || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($(redact "$HEAD_URL")) 다
        — 다른 저장소의 동명 브랜치다"
 # 한쪽이 비면 대조할 것이 없다 — 로컬 경로 원격이나 bundle 은 호스트가 없다.
 # `owner/repo` 대조는 위에서 이미 통과했으므로 더 가릴 것이 없다.
@@ -229,10 +234,10 @@ while IFS= read -r u; do
     [ -n "$u" ] || continue
     un=$(url_nwo "$u"); uh=$(url_host "$u")
     [ "$un" = "$PR_NWO" ] \
-        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $u 가 $PR_NWO 가 아니다($un).
+        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $(redact "$u") 가 $PR_NWO 가 아니다($un).
        이 이름으로 지우면 그쪽에서도 지워진다 — 멈춘다"
     [ -z "$GH_HOST" ] || [ -z "$uh" ] || [ "$uh" = "$GH_HOST" ] \
-        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $u 가 다른 서버($uh)다 — 멈춘다"
+        || die "원격 '$HEAD_REMOTE' 의 push URL 중 $(redact "$u") 가 다른 서버($uh)다 — 멈춘다"
 done <<URLEOF
 $HEAD_URLS
 URLEOF
@@ -381,50 +386,56 @@ if [ "$(git worktree list --porcelain | grep -cFx "branch refs/heads/$BR" || tru
     die "다른 worktree 가 $BR 을 체크아웃하고 있다 — 지우면 그쪽이 커밋을 잃는다"
 fi
 
-# 원격 브랜치: 이미 없으면 성공, 조회 자체가 실패하면 로컬을 남긴다.
-# --exit-code 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
-RLS=$(mktemp)
-# 패턴을 **전체 ref** 로 준다. 짧은 이름은 ref 이름의 끝부분에도 맞아서,
-# 브랜치가 `x` 일 때 원격의 `feature/x` 까지 함께 잡힌다 — 뒤의 awk 가 첫 행을
-# 읽어 **엉뚱한 OID 를 이 브랜치의 것으로 오인한다** (codex, PR #61).
-# **push URL 로 조회한다.** 이름으로 부르면 git 은 fetch URL 을 본다. fetch 와
-# push URL 이 다른 삼각 워크플로에서는 fetch 쪽에 이 브랜치가 없어 「이미 없다」로
-# 읽히고, **실제 push 대상의 브랜치가 살아남는다** (codex, PR #63).
-bounded 30 git ls-remote --exit-code "$HEAD_URL" "refs/heads/$BR" > "$RLS" 2>/dev/null
-case $? in
-    0)  # 원격이 아직 그 커밋을 가리키는지 본다. 큐를 기다리는 20분 사이에
-        # 누가 push 하거나 브랜치를 다시 만들었으면 **그 새 커밋이 날아간다** —
-        # 이 PR 에 없던 것이다. 리뷰된 SHA 에 묶어 지운다.
-        REMOTE_OID=$(awk '{print $1; exit}' "$RLS")
-        if [ "$REMOTE_OID" = "$REVIEWED" ]; then
-            # 조회와 삭제 **사이**에도 push 가 올 수 있다. 위 대조만으로는 그
-            # 틈을 못 막는다 — lease 로 삭제 자체를 리뷰된 SHA 에 묶는다.
-            # 원격이 그 사이 움직였으면 git 이 「stale info」로 거부한다
-            # (codex, PR #57. 두 갈래를 실측했다: 옛 lease→1·브랜치 유지,
-            #  맞는 lease→0·삭제).
-            # 이름 대신 **URL 을 하나씩** 짚는다. 이름으로 부르면 모든 push URL 에
-            # 한꺼번에 가서, 뒤쪽이 거부되면 앞쪽만 지워진 상태로 끝난다.
-            bounded 60 git push "$HEAD_URL" \
-                --force-with-lease="refs/heads/$BR:$REVIEWED" --delete "$BR" \
-                || { rm "$RLS" 2>/dev/null
-                     die "원격 삭제가 거부됐다. 조회 뒤 누가 push 했다 — 눈으로 확인한다"; }
-        else
-            rm "$RLS" 2>/dev/null
-            die "원격 $BR 이 ${REMOTE_OID:0:8} 를 가리킨다(리뷰된 것은 ${REVIEWED:0:8}).
-       머지 뒤에 누가 push 했다 — 그 커밋을 지우지 않는다. 눈으로 확인한다"
-        fi ;;
-    2)  printf '  원격에 이미 없다(자동 삭제 설정으로 보인다)\n' >&2 ;;
-    *)  rm "$RLS" 2>/dev/null; die "원격 조회 실패 — 지워졌는지 알 수 없어 로컬을 남긴다" ;;
-esac
-rm "$RLS" 2>/dev/null
+# ── 지우기 전에 **전부** 확인한다 ───────────────────────────────
+# 검사 하나가 삭제 뒤에 있으면 「원격만 지워진」 부분 정리가 된다. 다시 불러도
+# 원격이 없어 복구가 안 된다 — 이 세션에서 두 번 그렇게 됐다(worktree, 로컬 SHA).
+# **하나라도 어긋나면 아무것도 지우지 않는다.**
 
-# 큐를 기다린 20분 사이에 다른 터미널이 이 브랜치에 커밋을 얹었을 수 있다.
-# 원격은 그대로여서 여기까지 왔지만, 그대로 지우면 **push 안 한 그 커밋이
-# 날아간다.** 지우기 직전에 다시 잰다 (codex, PR #56).
+# 로컬이 옮겨졌나. 큐를 기다린 20분 사이에 다른 터미널이 커밋을 얹었을 수 있다.
 NOW_OID=$(git rev-parse "refs/heads/$BR" 2>/dev/null || echo)
 [ "$NOW_OID" = "$REVIEWED" ] \
     || die "로컬 $BR 이 ${NOW_OID:0:8} 로 옮겨졌다(리뷰된 것은 ${REVIEWED:0:8}).
        그 사이 커밋이 얹혔다 — 지우지 않는다"
+
+# 원격들이 아직 리뷰된 커밋을 가리키나. **push URL 마다** 본다 — 검증한 곳과
+# 지우는 곳이 어긋나면 한쪽만 지워진다 (codex, PR #65).
+# `--exit-code` 는 「없음」에만 2를 준다. 다른 값은 인증·전송 문제다.
+# 짧은 이름은 ref 끝부분에도 맞으므로 **전체 ref** 로 조회한다 (PR #61).
+DEL_URLS=
+while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    RLS=$(mktemp)
+    bounded 30 git ls-remote --exit-code "$u" "refs/heads/$BR" > "$RLS" 2>/dev/null
+    rc=$?
+    case $rc in
+        0)  ROID=$(awk '{print $1; exit}' "$RLS"); rm -f "$RLS"
+            [ "$ROID" = "$REVIEWED" ] \
+                || die "원격 $(redact "$u") 의 $BR 이 ${ROID:0:8} 를 가리킨다(리뷰된 것은 ${REVIEWED:0:8}).
+       머지 뒤에 누가 push 했다 — 그 커밋을 지우지 않는다. 눈으로 확인한다"
+            DEL_URLS="$DEL_URLS$u
+" ;;
+        2)  rm -f "$RLS"
+            printf '  %s 에는 이미 없다\n' "$(redact "$u")" >&2 ;;
+        *)  rm -f "$RLS"
+            die "원격 $(redact "$u") 조회 실패 — 지워졌는지 알 수 없어 아무것도 안 지운다" ;;
+    esac
+done <<CHKEOF
+$HEAD_URLS
+CHKEOF
+
+# ── 여기서부터 지운다 ───────────────────────────────────────────
+# 원격을 URL 마다 지운다. 이름으로 부르면 모든 push URL 에 한꺼번에 가서,
+# 뒤쪽이 거부되면 앞쪽만 지워진 상태로 끝난다.
+# lease 로 삭제 자체를 리뷰된 SHA 에 묶는다 — 조회와 삭제 **사이**의 push 를
+# 막는다 (PR #57 에서 두 갈래를 실측했다: 옛 lease→1·유지, 맞는 lease→0·삭제).
+while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    bounded 60 git push "$u" \
+        --force-with-lease="refs/heads/$BR:$REVIEWED" --delete "$BR" \
+        || die "원격 $(redact "$u") 삭제가 거부됐다. 조회 뒤 누가 push 했다 — 눈으로 확인한다"
+done <<DELEOF
+$DEL_URLS
+DELEOF
 
 # 위 대조와 삭제 **사이**에도 다른 프로세스가 ref 를 옮길 수 있다. `git branch -D`
 # 는 현재 값을 안 보고 지우므로 그 틈이 남는다. `update-ref -d <ref> <옛값>` 은

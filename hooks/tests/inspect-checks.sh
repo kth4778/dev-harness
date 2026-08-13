@@ -20,7 +20,10 @@ put_gh() {
 cat > "$BIN/gh" <<'GH'
 #!/usr/bin/env bash
 case "$*" in
-  *"repo view"*)             printf '%s\n' "${GH_UPSTREAM:-}" ;;
+  # 세 칸 TSV: parent(있으면 fork) · 이 저장소 · URL.
+  # GH_PARENT 를 주면 fork 상황이 된다.
+  *"repo view"*)             printf '%s\t%s\t%s\n' \
+                               "${GH_PARENT:-}" "${GH_UPSTREAM:-}" "${GH_URL:-}" ;;
   *"pr list"*"--state open"*) printf '%s\n' "${GH_CUR:-}" ;;
   *"pr list"*)               printf '%s\n' "${GH_PRIOR:-}" ;;
 esac
@@ -372,6 +375,34 @@ r 1 "$(grep -c 'json parent,nameWithOwner,url' "$SCRIPT" || true)" \
    'upstream NWO 와 URL 을 한 호출로 받는다'
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'json parent,url' || true)" \
    'URL 을 따로 조회하지 않는다'
+
+echo "── codex 지적 (PR #65) ──"
+# 마지막 인라인 테스트 블록만 걷어낸 커밋은 test-only 다 — 걸려야 한다.
+fresh
+mkdir -p src
+{ printf 'fn keep()->i32{1}\n'
+  printf '#[cfg(test)]\n'
+  printf 'mod t{ use super::*; #[test] fn a(){ assert_eq!(keep(),1); } }\n'; } > src/lib.rs
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/droptest
+printf 'fn keep()->i32{1}\n' > src/lib.rs      # 구현은 그대로, 테스트만 지운다
+git add .; git commit -qm "test: 테스트 블록만 걷어낸다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" '마지막 인라인 테스트만 지운 커밋을 통과시키지 않는다'
+
+# fork 인데 upstream 원격이 없으면 fork 의 origin 으로 떨어지지 않는다.
+fresh; git switch -qc feature/forkNoUp
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+r 1 "$(GH_PARENT=up/stream GH_UPSTREAM=me/fork out_of >/dev/null 2>&1; echo $?)" \
+   'fork 인데 upstream 원격이 없으면 멈춘다'
+printf '%s' "$(GH_PARENT=up/stream GH_UPSTREAM=me/fork out_of)" \
+  | grep -q "git remote add upstream" \
+  && r y y '어떻게 고치는지 알려준다' || r y n '어떻게 고치는지 알려준다'
+
+# fork 가 아니면 폴백이 맞는 답을 준다 — 막지 않는다.
+fresh; git switch -qc feature/notfork
+printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
+r 0 "$(GH_UPSTREAM=o/r out_of >/dev/null 2>&1; echo $?)" \
+   'fork 가 아니면 원격 이름이 달라도 돈다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

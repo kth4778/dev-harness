@@ -100,6 +100,8 @@ gh_out() {
 }
 
 UPSTREAM=
+UPSTREAM_URL=
+IS_FORK=
 if [ -n "$HEAD_OWNER" ]; then
     # 실패를 삼키면 UPSTREAM 이 비어 「건너뛴다」 갈래로 빠지고 **재사용 검사가
     # 조용히 꺼진다.** git fetch 인증은 되는데 gh 인증만 없는 경우가 실제로 있다.
@@ -108,10 +110,11 @@ if [ -n "$HEAD_OWNER" ]; then
     # 조회 한 번의 실패로 다시 열린다 (codex, PR #64).
     # 실패를 삼키는 함정을 이 세션에서 또 밟았다.
     UP_RAW=$(gh_out gh repo view --json parent,nameWithOwner,url \
-      -q '[(.parent.nameWithOwner // .nameWithOwner), (.parent.url // .url)] | @tsv') \
+      -q '[(.parent.nameWithOwner // ""), .nameWithOwner, (.parent.url // .url)] | @tsv') \
       || { bad "gh 로 저장소를 못 읽었다(인증·네트워크). 재사용 검사를 통과로 두지 않는다"; exit 1; }
-    UPSTREAM=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print $1}')
-    UPSTREAM_URL=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print $2}')
+    IS_FORK=$(printf '%s' "$UP_RAW"  | awk -F'\t' 'NR==1{print $1}')
+    UPSTREAM=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print ($1 != "" ? $1 : $2)}')
+    UPSTREAM_URL=$(printf '%s' "$UP_RAW" | awk -F'\t' 'NR==1{print $3}')
 fi
 if [ -n "$HEAD_OWNER" ] && [ -n "$UPSTREAM" ]; then
     # 뺄 번호는 **Phase 6 에서 넘긴 그 PR 하나**다. 비어 있으면 -1 로 둔다 —
@@ -177,8 +180,20 @@ if [ -n "$UPSTREAM" ]; then
         BASE_REMOTE="$rmt"; break
     done
 fi
-[ -n "$BASE_REMOTE" ] \
-    || BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" || echo origin)
+# **확인한 upstream 이 있는데 그 원격이 없으면 폴백하지 않는다.** fork 의
+# `origin/main` 은 대개 upstream 보다 뒤처져 있어, 그것으로 재면 **남의
+# upstream 커밋까지 내 기능 커밋으로 세어진다** (codex, PR #65).
+# merge-cleanup 은 같은 자리에서 멈추는데 여기만 폴백하고 있었다.
+if [ -z "$BASE_REMOTE" ]; then
+    # **fork 일 때만** 막는다. fork 가 아니면 UPSTREAM 은 이 저장소 자신이고
+    # origin 이 곧 그것이므로, 원격 이름이 달라도 폴백이 맞는 답을 준다.
+    if [ -n "$IS_FORK" ]; then
+        bad "upstream $UPSTREAM 을 가리키는 원격이 없다.
+       추가한 뒤 다시 돌린다:  git remote add upstream <그 저장소 URL>"
+        exit 1
+    fi
+    BASE_REMOTE=$(git config "branch.$BASE_BRANCH.remote" || echo origin)
+fi
 # ref 가 **있어도** 가져온다. 낡은 것으로 merge-base 를 재면 그 사이 upstream 에
 # 들어온 남의 커밋이 내 기능 커밋으로 세어진다 — 있으면 건너뛰던 것이 그 구멍이었다.
 # 갱신 실패를 넘기면 **낡은 ref 로 판정한다** — 그 사이 들어온 남의 커밋이
@@ -324,8 +339,22 @@ while read -r sha subject; do
             tstart=$(git show "$sha:$f" 2>/dev/null \
                        | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
             if [ -z "$tstart" ]; then
-                # 커밋 뒤에 테스트 표식이 없다 — 남은 것은 전부 구현이다.
-                # (테스트를 지운 경우라면 위에서 touched_test 를 이미 세웠다.)
+                if [ "$gone_test" -gt 0 ]; then
+                    # 테스트 표식을 **지운** 커밋이다. 여기서 무조건 구현도
+                    # 바꿨다고 치면, 마지막 테스트 블록만 걷어낸 test-only 커밋이
+                    # 통과한다 (codex, PR #65). **부모 쪽 경계**로 다시 잰다.
+                    ptstart=$(git show "$sha^:$f" 2>/dev/null \
+                                | grep -nE "$INLINE_TEST" | awk -F: 'NR==1{print $1}')
+                    if [ -n "$ptstart" ]; then
+                        # hunk 헤더의 **- 쪽** 줄 번호가 부모 기준 위치다.
+                        plo=$(git show --format= -U0 "$sha" -- "$f" 2>/dev/null \
+                                | sed -nE 's/^@@ -([0-9]+).*/\1/p' | sort -n \
+                                | awk 'NR==1{print}')
+                        [ -n "$plo" ] && [ "$plo" -lt "$ptstart" ] && touched_src=1
+                        continue
+                    fi
+                fi
+                # 테스트 표식이 애초에 없던 파일 — 전부 구현이다.
                 touched_src=1
                 continue
             fi
