@@ -48,13 +48,18 @@ r 2 "$(feed $'"gh pr comment 57 --body \'이 부분이 틀렸습니다\'"')"    
 r 0 "$(feed '"gh pr comment 57 --body=\"@claude review 한국어로\""')"  '--body= 붙임표 형태'
 r 0 "$(feed '"cd /somewhere && gh pr comment 57 --body \"@codex review\""')" '앞에 cd 가 붙어도 읽는다'
 
-# 파일로 넘긴 본문은 파일을 열어 판정한다. 못 읽으면 막는다(위 갈래).
+# 파일 형태는 **내용과 무관하게** 막는다. 훅은 실행 전에 도는데 같은 명령줄이
+# 파일을 덮어쓴 뒤 보낼 수 있어, 훅이 본 것과 전송되는 것이 다르다(TOCTOU).
 TMPB=$(mktemp -d)
 printf '@codex review 한국어로\n' > "$TMPB/bot.txt"
 printf '여기 버그가 있습니다\n'    > "$TMPB/review.txt"
-r 0 "$(feed "\"gh pr comment 57 --body-file $TMPB/bot.txt\"")"     '파일 안이 봇 토큰이면 통과'
+r 2 "$(feed "\"gh pr comment 57 --body-file $TMPB/bot.txt\"")"     '파일 안이 봇 토큰이어도 막는다'
 r 2 "$(feed "\"gh pr comment 57 --body-file $TMPB/review.txt\"")"  '파일 안이 리뷰 내용이면 막는다'
-r 0 "$(feed "\"gh pr comment 57 -F $TMPB/bot.txt\"")"             '-F 짧은 형태도 읽는다'
+r 2 "$(feed "\"gh pr comment 57 -F $TMPB/bot.txt\"")"             '-F 짧은 형태도 막는다'
+
+# codex 가 짚은 실제 우회 시나리오. 같은 명령줄이 먼저 덮어쓴다.
+r 2 "$(feed "\"printf '사람 리뷰' > $TMPB/bot.txt; gh pr comment 57 --body-file $TMPB/bot.txt\"")" \
+   '같은 줄에서 파일을 덮어써도 못 뚫는다'
 rm -rf "$TMPB"
 
 echo

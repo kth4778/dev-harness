@@ -143,7 +143,8 @@ fi
 REVIEWED="$PR_OID"
 
 # head 를 올린 원격. base 와 다를 수 있다(fork). 머지 **전에** 잡아둔다 —
-# `--delete-branch` 가 로컬 브랜치를 지우고 나면 못 구한다.
+# 아래 정리 단계가 로컬 브랜치를 지우고 나면 `branch.<이름>.pushRemote` 설정이
+# 함께 사라져 못 구한다.
 HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
   || git config remote.pushDefault \
   || git config "branch.$BR.remote" \
@@ -235,12 +236,14 @@ if [ "$M_OK" = "false" ]; then
 fi
 
 # --match-head-commit 이 리뷰된 커밋과 다르면 거부한다.
-# merge queue 를 쓰는 저장소는 --delete-branch 를 거부하므로 두 갈래로 시도한다.
-if ! bounded 60 gh pr merge "$PR" "$STRAT" --delete-branch --match-head-commit "$REVIEWED"; then
-    printf '  --delete-branch 가 거부됐다(merge queue로 보인다). 플래그 없이 넣는다\n' >&2
-    bounded 60 gh pr merge "$PR" "$STRAT" --match-head-commit "$REVIEWED" \
-        || die "머지 요청이 실패했다. 인증·권한·체크, 그리고 리뷰 뒤 push 가 있었는지 확인한다"
-fi
+#
+# **`--delete-branch` 를 쓰지 않는다.** 그 플래그는 머지가 되자마자 로컬과 원격을
+# 즉시 지운다 — 아래의 「리뷰된 SHA 를 가리킬 때만 지운다」 안전장치가 통째로
+# 우회되고, 로컬 재검증은 지워진 ref 를 재느라 **정상 실행이 매번 실패로 끝난다.**
+# 그러면 뒤따르는 위키 반영·티켓 정리도 멈춘다 (codex, PR #57).
+# 삭제는 전부 아래의 검증된 절차가 한다.
+bounded 60 gh pr merge "$PR" "$STRAT" --match-head-commit "$REVIEWED" \
+    || die "머지 요청이 실패했다. 인증·권한·체크, 그리고 리뷰 뒤 push 가 있었는지 확인한다"
 
 # ── 머지가 **실제로** 끝났는지 본다 ─────────────────────────────
 # 명령이 성공해도 큐에 넣기만 했거나 auto-merge 를 켜 둔 것일 수 있다.
@@ -275,8 +278,15 @@ case $? in
         # 이 PR 에 없던 것이다. 리뷰된 SHA 에 묶어 지운다.
         REMOTE_OID=$(awk '{print $1; exit}' "$RLS")
         if [ "$REMOTE_OID" = "$REVIEWED" ]; then
-            bounded 60 git push "$HEAD_REMOTE" --delete "$BR" \
-                || { rm "$RLS" 2>/dev/null; die "원격 삭제 실패 — 로컬도 남긴다"; }
+            # 조회와 삭제 **사이**에도 push 가 올 수 있다. 위 대조만으로는 그
+            # 틈을 못 막는다 — lease 로 삭제 자체를 리뷰된 SHA 에 묶는다.
+            # 원격이 그 사이 움직였으면 git 이 「stale info」로 거부한다
+            # (codex, PR #57. 두 갈래를 실측했다: 옛 lease→1·브랜치 유지,
+            #  맞는 lease→0·삭제).
+            bounded 60 git push "$HEAD_REMOTE" \
+                --force-with-lease="refs/heads/$BR:$REVIEWED" --delete "$BR" \
+                || { rm "$RLS" 2>/dev/null
+                     die "원격 삭제가 거부됐다. 조회 뒤 누가 push 했다 — 눈으로 확인한다"; }
         else
             rm "$RLS" 2>/dev/null
             die "원격 $BR 이 ${REMOTE_OID:0:8} 를 가리킨다(리뷰된 것은 ${REVIEWED:0:8}).

@@ -222,6 +222,18 @@ out=$(GH_OID=$(git rev-parse HEAD~1) run); rc=$?
 r 1 "$rc" '로컬이 앞서 있으면 멈춘다(push 안 한 커밋을 안 날린다)'
 r "feature/x" "$(git branch --show-current)" '브랜치가 그대로 있다'
 
+echo "── codex 지적 (PR #57) ──"
+# --delete-branch 는 머지 직후 로컬·원격을 즉시 지운다. 그러면 뒤의 재검증이
+# 지워진 ref 를 재느라 **정상 실행이 매번 실패로 끝난다.**
+# grep -c 를 쓴다 — -q 는 매치하자마자 닫혀 SIGPIPE 함정을 부른다.
+# 주석은 이 플래그를 **설명**한다 — 세면 안 된다. 명령줄만 본다.
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c -- '--delete-branch' || true)" \
+   '머지 호출에 --delete-branch 를 쓰지 않는다'
+
+# 원격 삭제는 리뷰된 SHA 에 lease 로 묶는다 — 조회와 삭제 사이의 push 를 막는다.
+r 1 "$(grep -c 'force-with-lease' "$SCRIPT" || true)" \
+   '원격 삭제를 리뷰된 SHA 에 lease 로 묶는다'
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]
