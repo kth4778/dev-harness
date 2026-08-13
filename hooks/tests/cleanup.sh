@@ -291,8 +291,8 @@ r 1 "$(grep -c 'remove-section' "$SCRIPT" || true)" \
 # 이제 PR URL 에서 호스트를 한 번 뽑아(API_HOST) 그것을 재사용한다.
 r 1 "$(grep -c 'API_HOST=$(printf' "$SCRIPT" || true)" \
    'PR 호스트를 PR 자신의 URL 에서 구한다'
-r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'url_host "\$PR_URL"' || true)" \
-   '호스트를 두 번 뽑지 않는다'
+r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'API_HOST=$(printf' || true)" \
+   'gh 에 넘길 호스트는 원형 그대로 둔다'
 
 echo "── codex 지적 (PR #61) ──"
 # Enterprise 에 있는 PR 은 gh api 기본 호스트(github.com)로 조회하면 증거를
@@ -304,9 +304,11 @@ r 4 "$(grep -c 'gh api --hostname' "$SCRIPT" || true)" \
 fresh
 git remote set-url --push origin "$R/me/work"
 : > claudeb; : > claudeo          # 패턴에 맞는 파일을 만든다
-out=$(run); rc=$?
+# 커밋한다 — 작업 트리가 더러우면 그 검사에 먼저 걸린다.
+git add claudeb claudeo; git commit -qm "chore: 패턴에 맞는 파일"
+git push -q origin feature/x 2>/dev/null
+out=$(GH_OID=$(git rev-parse HEAD) run); rc=$?
 r 0 "$rc" '작업 폴더에 claudeb 같은 파일이 있어도 봇 로그인이 안 망가진다'
-rm -f claudeb claudeo
 
 # 짧은 이름은 ref 이름의 **끝부분**에도 맞는다 — 전체 ref 로 조회해야 한다.
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'ls-remote --exit-code --heads' || true)" \
@@ -434,6 +436,29 @@ r "github.com"      "$(. "$FN"; url_host ssh://git@github.com:22/me/w.git)" 'ssh
 r "github.com"      "$(. "$FN"; url_host https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
 r "git.ex.com:8443" "$(. "$FN"; url_host https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
 rm -f "$FN"
+
+echo "── codex 지적 (PR #67) ──"
+# 커밋되지 않은 변경이 있으면 **머지 전에** 멈춘다. 안 그러면 서버만 머지되고
+# 브랜치를 못 옮겨 정리가 중간에 선다.
+fresh
+git remote set-url --push origin "$R/me/work"
+printf 'dirty\n' > dirty.txt          # 추적 안 된 파일
+out=$(run); rc=$?
+r 1 "$rc" '작업 트리가 더러우면 머지 전에 멈춘다'
+printf '%s' "$out" | grep -q "커밋되지 않은 변경" \
+  && r y y '무엇이 문제인지 알린다' || r y n '무엇이 문제인지 알린다'
+r "feature/x" "$(git branch --show-current)" '아무것도 안 지운다'
+
+# 추적 파일을 고친 경우도 같다.
+fresh
+git remote set-url --push origin "$R/me/work"
+printf 'changed\n' >> f.txt 2>/dev/null || printf 'changed\n' >> base.txt
+out=$(run); rc=$?
+r 1 "$rc" '추적 파일이 바뀐 경우도 멈춘다'
+
+# 대조용 호스트도 push URL 과 같은 규칙으로 정규화해야 한다.
+r 1 "$(grep -c 'GH_HOST=$(url_host "$PR_URL")' "$SCRIPT" || true)" \
+   '대조용 호스트를 url_host 로 정규화한다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

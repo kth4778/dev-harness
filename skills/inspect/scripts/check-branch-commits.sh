@@ -83,12 +83,30 @@ HEAD_REMOTE=$(git config "branch.$BR.pushRemote" \
 # 않는다」 원칙과 같다. 있는데 못 읽는 것은 다르다(그때는 실패).
 HEAD_OWNER=
 if has_remote "$HEAD_REMOTE"; then
-    HEAD_URL=$(git remote get-url --push "$HEAD_REMOTE" 2>/dev/null) \
+    # **push URL 이 여럿일 수 있다.** 첫 것만 보면 두 번째 fork 에서 같은
+    # 브랜치로 열었던 PR 이력이 걸리지 않는데, `git push <이름>` 은 그쪽에도
+    # 올라간다 — PR 없이 커밋만 쌓이는 바로 그 재사용이다 (codex, PR #67).
+    # merge-cleanup 은 앞 라운드에 `--all` 로 고쳤고 여기를 빠뜨렸다.
+    HEAD_URLS=$(git remote get-url --push --all "$HEAD_REMOTE" 2>/dev/null) \
       || { bad "원격 '$HEAD_REMOTE' 의 push URL 을 못 구했다. 재사용 검사를 못 한다"; exit 1; }
+    HEAD_URL=$(printf '%s\n' "$HEAD_URLS" | awk 'NR==1{print}')
+    # 소유자를 전부 모은다. 하나라도 옛 PR 이 걸리면 FAIL 이다.
+    HEAD_OWNERS=
+    while IFS= read -r hu; do
+        [ -n "$hu" ] || continue
+        o=$(printf '%s' "$hu" \
+          | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/+$##; s#\.git$##; s#/[^/]+$##; s#^.*/##')
+        [ -n "$o" ] \
+          || { bad "원격 URL 에서 소유자를 못 뽑았다: $(redact "$hu")"; exit 1; }
+        case "$HEAD_OWNERS" in
+            *"|$o|"*) : ;;
+            *) HEAD_OWNERS="${HEAD_OWNERS:-|}$o|" ;;
+        esac
+    done <<HUEOF
+$HEAD_URLS
+HUEOF
     HEAD_OWNER=$(printf '%s' "$HEAD_URL" \
       | sed -E 's#^[a-z+]+://[^/]*/##; s#^[^/]*:##; s#/+$##; s#\.git$##; s#/[^/]+$##; s#^.*/##')
-    [ -n "$HEAD_OWNER" ] \
-      || { bad "원격 URL 에서 소유자를 못 뽑았다: $(redact "$HEAD_URL")"; exit 1; }
 else
     printf '  (원격이 없다 — 재사용 검사를 건너뛴다)\n' >&2
 fi
@@ -279,7 +297,13 @@ while read -r sha subject; do
     # 그대로 두면 빈 SHA 가 「갈라진 커밋」으로 기록돼 거짓 FAIL 이 났다
     # (claude, PR #53).
     [ -n "$sha" ] || continue
-    case "$subject" in refactor:*|refactor\(*|chore:*|chore\(*) continue ;; esac
+    # **제목으로 건너뛰지 않는다.** `chore: 런타임 설정 로더 변경` 처럼 운영
+    # 코드만 고친 커밋이 제목 하나로 통과했다 — 이 검사의 핵심인 「구현만 있는
+    # 커밋」 탐지가 Conventional Commit 접두사 하나로 무력해졌다 (codex, PR #67).
+    #
+    # 예외는 **바뀐 경로**로만 판정한다(아래 문서 예외). 순수 이동·이름 변경은
+    # 테스트 파일도 함께 움직이므로 대개 그대로 통과한다. 남는 거짓 차단은
+    # 사람이 그 자리에서 알아채지만, 거짓 통과는 이력에 남는다.
 
     # 두 벌로 나눈다.
     #  - files_all : 삭제 포함. 「이 커밋이 무엇을 건드렸나」를 분류할 때 쓴다

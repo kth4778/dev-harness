@@ -88,6 +88,16 @@ PR_REPO=$(gh_json headRepository .headRepository.name) \
     || die "PR #$PR 의 head 는 ${PR_OID:0:8} 인데 로컬 HEAD 는 ${LOCAL_OID:0:8} 다.
        push 안 한 커밋이 있거나 다른 저장소의 동명 브랜치다"
 
+# 원격 상태를 바꾸기 **전에** 작업 트리가 깨끗한지 본다.
+# 커밋 SHA 만 맞추면 미커밋 변경이 있어도 통과하는데, 그 뒤 `gh pr merge` 가
+# 먼저 돌고 브랜치를 옮기지 못해 **서버만 머지되고 정리가 멈춘다.** 옮겨지면
+# 그 변경이 통합 브랜치로 딸려 간 채 기능 브랜치가 지워진다 (codex, PR #67).
+DIRTY=$(git status --porcelain 2>/dev/null | grep -c . || true)
+[ "$DIRTY" -eq 0 ] \
+    || die "작업 트리에 커밋되지 않은 변경이 $DIRTY 개 있다.
+       머지하면 브랜치를 옮기지 못해 정리가 중간에 멈춘다 — 먼저 정리한다:
+         git status --short"
+
 # **리뷰가 실제로 붙은 커밋**을 얻는다. 현재 head 를 그대로 쓰면
 # `--match-head-commit` 이 무의미하다 — 리뷰 뒤에 push 됐다면 그 새 커밋이
 # 이미 head 이기 때문이다. 이 워크플로에는 synchronize 가 없어 **그 커밋은
@@ -232,7 +242,12 @@ PR_NWO=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
 # **PR 자신의 URL 에서 구한다.** 로컬 원격 설정에서 구하면, 통합 브랜치가
 # 사내 미러를 추적하는 구성에서 정상 head 를 「다른 서버」로 오판해 아래의
 # 올바른 base 탐색에 닿기도 전에 멈춘다 (codex, PR #60).
-GH_HOST=$(printf '%s' "$API_HOST" | tr '[:upper:]' '[:lower:]')
+# **대조용 호스트는 push URL 과 같은 규칙으로 정규화한다.** PR URL 이
+# `https://ghe.example.com:443/…` 처럼 기본 포트를 명시하면, push URL 쪽은
+# url_host 가 포트를 떼는데 이쪽은 안 떼서 **정상 원격을 다른 서버로 판정하고
+# 머지를 항상 막았다** (codex, PR #67).
+# `gh --hostname` 에 넘기는 API_HOST 는 원형 그대로 둔다.
+GH_HOST=$(url_host "$PR_URL")
 [ "$MY_NWO" = "$PR_NWO" ] \
     || die "PR #$PR 의 head 는 $PR_NWO 인데 내 push 대상은 ${MY_NWO:-?}($(redact "$HEAD_URL")) 다
        — 다른 저장소의 동명 브랜치다"

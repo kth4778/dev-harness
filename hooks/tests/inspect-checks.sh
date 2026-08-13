@@ -73,11 +73,20 @@ printf '%s' "$o" | grep -q "갈라진 커밋" && r y y '구현만·테스트만 
 printf '%s' "$o" | grep -q "구현만" && r y y '어느 커밋인지 알린다' || r y n '어느 커밋인지 알린다'
 r 1 "$rc_split" '**찍기만 하지 않고 FAIL 로 끝난다**'
 
-echo "── 리팩터·문서는 예외 ──"
-fresh; git switch -qc feature/refactor
-printf 'x\n' > src.txt; git add src.txt; git commit -qm "refactor: 옮긴다"
+echo "── 예외는 경로로만 준다 ──"
+# 문서만 바뀐 커밋은 예외다.
+fresh; git switch -qc feature/docsonly
 printf 'd\n' > README.md; git add README.md; git commit -qm "docs: 적는다"
-printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y '리팩터·문서는 안 짚는다' || r n n '리팩터·문서는 안 짚는다'
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r n y '문서만 바뀐 커밋은 안 짚는다' || r n n '문서만 바뀐 커밋은 안 짚는다'
+
+# **제목으로는 예외를 주지 않는다.** refactor:·chore: 를 달아도 구현만 있으면 짚는다.
+fresh; git switch -qc feature/refactortitle
+printf 'x\n' > src.txt; git add src.txt; git commit -qm "refactor: 옮긴다"
+printf '%s' "$(out_of)" | grep -q "갈라진 커밋" && r y y 'refactor: 제목으로 안 넘어간다' || r y n 'refactor: 제목으로 안 넘어간다'
+
+fresh; git switch -qc feature/choretitle
+printf 'x\n' > loader.py; git add .; git commit -qm "chore: 런타임 설정 로더를 바꾼다"
+r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'chore: 제목으로도 안 넘어간다'
 
 echo "── 같은 파일 반복 ──"
 fresh; git switch -qc feature/repeat
