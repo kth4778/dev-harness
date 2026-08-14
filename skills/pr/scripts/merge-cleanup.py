@@ -14,6 +14,15 @@ import os
 import re
 import subprocess
 import sys
+
+# Windows 콘솔(CP949)은 이 스크립트의 출력 문구에 든 — (U+2014) 를 인코딩하지
+# 못해, **성공한 검사가 출력 단계에서 죽는다** (codex, PR #92 — wiki-sync 가
+# 문서화한 바로 그 환경이다). 문구를 바꾸는 대신 스트림을 관대하게 만든다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except AttributeError:
+        pass
 import time
 
 
@@ -49,18 +58,21 @@ def run(args, timeout=None):
         return p.returncode, out
     except subprocess.TimeoutExpired:
         # Windows 에는 SIGKILL·killpg·getpgid 가 없다 — 그대로 부르면 시한
-        # 처리 자체가 AttributeError 로 죽어 자식이 산 채로 남는다
-        # (codex, PR #91). 그룹 종료가 없는 플랫폼에서는 프로세스만 죽인다.
-        if hasattr(os, "killpg"):
-            sigs = (signal.SIGTERM, signal.SIGKILL)
-        else:
-            sigs = (signal.SIGTERM,)
-        for sig in sigs:
+        # 처리 자체가 AttributeError 로 죽어 자식이 산 채로 남는다 (PR #91).
+        # 프로세스 하나만 죽이는 것도 부족하다 — 파괴적 명령(push --delete)이
+        # 띄운 ssh 가 살아남아 **시한 뒤에 삭제를 마칠 수 있다** (codex, PR #92).
+        # Windows 는 taskkill /T 로 **트리 전체**를 끝낸다.
+        if not hasattr(os, "killpg"):
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                           capture_output=True)
             try:
-                if hasattr(os, "killpg"):
-                    os.killpg(os.getpgid(p.pid), sig)
-                else:
-                    p.kill()
+                p.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            return 124, ""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(os.getpgid(p.pid), sig)
             except (ProcessLookupError, PermissionError):
                 p.kill()
             try:
