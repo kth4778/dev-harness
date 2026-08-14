@@ -61,7 +61,10 @@ read_or_empty() {
 # 회고에서 승격한 규칙이 세션에 주입되지 않아 **승격이 무효가 된다**
 # (codex, PR #76). 「훅을 고칠 때」처럼 — 로 시작하는 부제는 그대로 들어간다.
 rules=$(grep -E '^## ' "${PLUGIN_ROOT}/RULES.md" 2>/dev/null | sed 's/^## /  /')
-if [ "$(printf '%s\n' "$rules" | grep -c .)" -lt 10 ]; then
+# 문턱은 15 다(번호 10 + 승격 4 + 훅 절 1). 10 으로 두면 승격 절 하나가
+# 실수로 ### 로 강등돼도 통과해 **그 규칙만 조용히 사라진다** (codex, PR #77).
+# 절을 늘리면 이 숫자도 같이 올린다 — 내리는 실수는 아래 폴백이 잡는다.
+if [ "$(printf '%s\n' "$rules" | grep -c .)" -lt 15 ]; then
     rules=$(read_or_empty "${PLUGIN_ROOT}/RULES.md")
     rules_note="(제목 추출 실패 — 전문을 넣었다)"
 else
