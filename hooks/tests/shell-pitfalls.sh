@@ -78,6 +78,16 @@ printf '#!/usr/bin/env bash\ncat ${dir#./}/f | grep -q needle || exit 1\n' > "$T
 r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '파라미터 확장의 # 뒤 파이프도 잡는다'
 rm -f "$T/a/bad.sh"
 
+echo "── PR #90 지적 ──"
+# 인접 구두점(`)|`)이 파이프를 삼키면 거짓 통과다.
+printf '#!/usr/bin/env bash\n$(cmd)|grep -q pat || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '공백 없는 )|grep -q 도 잡는다'
+
+# 줄 끝 진짜 주석 속 -q 언급은 오탐이 아니어야 한다.
+printf '#!/usr/bin/env bash\nn=$(cmd | grep -c pat)   # -q 를 쓰면 안 된다\n' > "$T/a/bad.sh"
+r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '주석 속 -q 언급을 오판하지 않는다'
+rm -f "$T/a/bad.sh"
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.

@@ -113,9 +113,24 @@ def scan_line(line):
         # 닫히지 않은 인용 등 — 셸 문법이 아닌 파일일 수 있다. 판정하지
         # 않고 넘기면 거짓 통과가 되므로, 논리 줄 원문으로 보수적으로 본다.
         return bool(re.search(r"\|\s*grep\s+[^|;&]*(-[A-Za-z]*q|--quiet|--silent)", line))
+    # 인접 구두점을 문자 단위로 푼다. shlex 는 연속된 punctuation_chars 를
+    # 한 토큰으로 묶으므로 `$(cmd)|grep -q` 의 `)|` 가 delimiter 집합의 어느
+    # 원소와도 안 맞아 **파이프가 통째로 사라졌다** (claude, PR #90).
+    flat = []
+    for t in tokens:
+        if t and all(c in "|;&()" for c in t) and t not in {"&&", "||"}:
+            flat.extend(t)
+        else:
+            flat.append(t)
     seg = []
     prev_pipe = False
-    for t in tokens:
+    for t in flat:
+        # 독립 토큰으로 나온 `#` 부터는 진짜 줄 끝 주석이다 — 셸 규칙과 같다
+        # (# 는 **단어 시작**에서만 주석이고, `${dir#./}` 처럼 단어 중간이면
+        # 값의 일부다). commenters 를 끈 대가로 주석 속 `-q` 가 grep 세그먼트에
+        # 흡수돼 정상 `grep -c` 를 오판했다 (claude, PR #90). 여기서 끊는다.
+        if t.startswith("#"):
+            break
         if t in {"|", ";", "&", "&&", "||", "(", ")"}:
             if prev_pipe and is_quiet_grep_segment(seg):
                 return True
