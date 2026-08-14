@@ -399,8 +399,11 @@ def main():
 
     # ── 머지가 **실제로** 끝났는지 본다 ─────────────────────────
     # 명령이 성공해도 큐에 넣기만 했을 수 있다 — 아니면 열린 PR 의 브랜치를 지운다.
-    deadline = time.time() + int(os.environ.get("CLEANUP_WAIT_SEC", "1200"))
-    poll = float(os.environ.get("CLEANUP_POLL_SEC", "20"))
+    # `or` — 빈 문자열로 export 돼도 기본값을 쓴다. int("") 로 죽으면 머지는
+    # 이미 끝난 뒤라 정리만 중단된 반쪽 상태가 남는다 (codex, PR #95).
+    # sh 판의 ${VAR:-기본} 과 같은 판정이다.
+    deadline = time.time() + int(os.environ.get("CLEANUP_WAIT_SEC") or "1200")
+    poll = float(os.environ.get("CLEANUP_POLL_SEC") or "20")
     while True:
         okv, st = gh_json("state", ".state")
         if not okv:

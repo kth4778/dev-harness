@@ -112,10 +112,39 @@ def is_quiet_grep_segment(tokens):
     return False
 
 
-def tokenize(line):
+def _find_subst_end(line, start):
+    """`$(` 의 `(` 위치(start)에서 짝 맞는 `)` 인덱스를 준다. 못 찾으면 len.
+
+    안쪽 인용을 추적하고, 이스케이프된 `\\)` 는 종결로 세지 않는다 —
+    조기 종결하면 진짜 파이프가 인용 속에 남아 거짓 통과다 (codex, PR #95).
+    """
+    depth, q = 0, None
+    j, n = start, len(line)
+    while j < n:
+        d = line[j]
+        if q:
+            if q == '"' and d == "\\":
+                j += 1
+            elif d == q:
+                q = None
+        elif d == "\\":
+            j += 1
+        elif d in "'\"":
+            q = d
+        elif d == "(":
+            depth += 1
+        elif d == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return n
+
+
+def tokenize(line, subs=None):
     """셸 인용 규칙대로 논리 줄을 단어·연산자 토큰으로 가른다.
 
-    지켜야 했던 셸 규칙 네 가지 — 전부 shlex 로 밟았던 자리다:
+    지켜야 했던 셸 규칙 다섯 가지 — 전부 리뷰에서 밟았던 자리다:
       - 인용은 **단어 어느 위치에서든** 시작한다. VAR="…" 나 --msg='…' 의
         값 속 파이프는 리터럴이다 (claude, PR #93 — posix=False 는 토큰
         시작에서만 인용을 인식해 거짓 차단이 났다)
@@ -125,50 +154,31 @@ def tokenize(line):
         값의 일부다 (codex, PR #89)
       - 메타문자 `| ; & ( )` 는 공백 없이 붙어도 경계다. `$(cmd)|grep` 의
         `)|` 가 한 덩어리로 묶이면 파이프가 사라진다 (claude, PR #90)
+      - `$( … )` 안은 작은따옴표 안이 아닌 한 **실행 컨텍스트**다. 안쪽
+        문자열을 subs 로 모아 호출자가 같은 규칙으로 다시 본다 (claude,
+        PR #94·#95 — 경계 토큰으로 흘리면 치환 **뒤의** -q 를 놓친다)
     """
     tokens, word = [], []
     quote = None  # 열려 있는 인용부호 — "'" 또는 '"'
     i, n = 0, len(line)
     while i < n:
         c = line[i]
+        if c == "$" and i + 1 < n and line[i + 1] == "(" and quote != "'":
+            # 명령 치환 — 원문은 단어의 일부로 남기고(치환 결과는 인자다),
+            # 안쪽은 subs 로 모아 별도 판정한다. 인용 상태는 그대로 잇는다.
+            j = _find_subst_end(line, i + 1)
+            if subs is not None:
+                subs.append(line[i + 2:j])
+            word.append(line[i:j + 1])
+            i = j + 1  # 짝을 못 찾았으면 n+1 — 줄 끝까지 거둔 것이다
+            continue
         if quote:
-            if quote == '"' and c == "$" and i + 1 < n and line[i + 1] == "(":
-                # 큰따옴표 안 명령 치환 — 셸은 이 안을 실제로 실행하므로
-                # 리터럴로 삼키면 안의 파이프가 거짓 통과한다 (claude, PR #94).
-                # 짝 맞는 ) 까지 거둬 재귀로 토큰화하고, 경계 토큰 ( ) 사이에
-                # 끼워 흘린다 — scan_line 이 안의 파이프를 그대로 본다.
-                j, depth, inner_q = i + 1, 0, None
-                while j < n:
-                    d = line[j]
-                    if inner_q:
-                        if d == "\\":
-                            j += 1
-                        elif d == inner_q:
-                            inner_q = None
-                    elif d in "'\"":
-                        inner_q = d
-                    elif d == "(":
-                        depth += 1
-                    elif d == ")":
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    j += 1
-                if word:
-                    tokens.append("".join(word))
-                    word = []
-                tokens.append("(")
-                tokens.extend(tokenize(line[i + 2:j]))
-                tokens.append(")")
-                i = j  # 짝을 못 찾으면 n — 줄 끝까지 거둔 것이다
-                # 바깥 큰따옴표는 계속 열려 있다 — 닫는 " 를 계속 기다린다
-            else:
-                word.append(c)
-                if quote == '"' and c == "\\" and i + 1 < n:
-                    i += 1
-                    word.append(line[i])  # \" 가 닫는 따옴표로 읽히지 않게
-                elif c == quote:
-                    quote = None
+            word.append(c)
+            if quote == '"' and c == "\\" and i + 1 < n:
+                i += 1
+                word.append(line[i])  # \" 가 닫는 따옴표로 읽히지 않게
+            elif c == quote:
+                quote = None
         elif c == "\\":
             word.append(c)
             if i + 1 < n:
@@ -205,9 +215,10 @@ def tokenize(line):
 
 def scan_line(line):
     """논리 줄 하나에 「파이프 뒤 quiet grep」이 있으면 참."""
+    subs = []
     seg = []
     prev_pipe = False
-    for t in tokenize(line):
+    for t in tokenize(line, subs):
         if t in {"|", ";", "&", "&&", "||", "(", ")"}:
             if prev_pipe and is_quiet_grep_segment(seg):
                 return True
@@ -215,7 +226,10 @@ def scan_line(line):
             seg = []
         else:
             seg.append(t)
-    return prev_pipe and is_quiet_grep_segment(seg)
+    if prev_pipe and is_quiet_grep_segment(seg):
+        return True
+    # 명령 치환 안도 실행 컨텍스트다 — 같은 규칙으로 재귀 판정한다.
+    return any(scan_line(s) for s in subs)
 
 
 def scan_file(path):
@@ -242,7 +256,13 @@ def iter_files(root):
             # 검사를 빠져나간다 (codex, PR #93).
             if name in {"check-shell-pitfalls.py", "check-shell-pitfalls.sh"}:
                 continue
-            yield os.path.join(dirpath, name)
+            path = os.path.join(dirpath, name)
+            # 파일 심링크는 따라가지 않는다 — 대상이 저장소 밖일 수 있어
+            # 판정이 호스트 상태에 좌우된다. sh 판(find -type f)과 같다
+            # (codex, PR #95).
+            if os.path.islink(path):
+                continue
+            yield path
 
 
 def main(argv):

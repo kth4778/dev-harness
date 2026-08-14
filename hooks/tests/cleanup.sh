@@ -136,6 +136,13 @@ r "feature/x" "$(git branch --show-current)" '열린 PR 의 브랜치를 안 지
 fresh; out=$(GH_STATE=CLOSED run); rc=$?
 r 1 "$rc" '닫혔으면 정리하지 않는다'
 
+echo "── 빈 환경 변수는 기본값으로 ──"
+# 빈 문자열로 export 된 CLEANUP_*_SEC 가 int() 에서 죽으면, 머지는 이미 끝난
+# 뒤라 정리만 중단된 반쪽 상태가 남는다 — sh 판의 ${VAR:-기본} 과 같게 본다.
+fresh; out=$(CLEANUP_WAIT_SEC="" CLEANUP_POLL_SEC="" GH_OID="$(git rev-parse HEAD)" \
+    python3 "$SCRIPT" 1 2>&1); rc=$?
+r 0 "$rc" '빈 CLEANUP_*_SEC 는 기본값으로 돈다'
+
 echo "── 조회 실패를 삼키지 않는다 ──"
 fresh; out=$(GH_VIEW_RC=1 run); rc=$?
 r 1 "$rc" 'gh 조회가 실패하면 즉시 멈춘다'

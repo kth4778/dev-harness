@@ -129,6 +129,23 @@ printf "#!/usr/bin/env bash\nmsg='ex: \$(cmd | grep -q pat)'\nprintf %%s \"\$msg
 r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" "작은따옴표 안 \$() 는 리터럴 — 오인하지 않는다"
 rm -f "$T/a/bad.sh"
 
+echo "── PR #95 지적 ──"
+# 치환을 ( ) 경계 토큰으로 흘리면 scan_line 이 세그먼트를 리셋해, 치환 인자
+# **뒤에** 오는 -q 를 놓친다(직전 커밋발 회귀 — claude).
+printf '#!/usr/bin/env bash\ncmd | grep "$(pat)" -q || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '플래그가 치환 인자 뒤에 와도 잡는다'
+
+# 이스케이프된 \) 가 치환 종결로 읽히면 안의 파이프가 인용 속에 남아 거짓 통과다.
+printf '#!/usr/bin/env bash\nout="$(producer foo\\) | grep -q x)"\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '이스케이프된 괄호가 치환을 조기 종결하지 않는다'
+rm -f "$T/a/bad.sh"
+
+# 파일 심링크를 따라가면 저장소 밖 파일이 판정에 끼어든다 — sh 판(find -type f)과 같게 뺀다.
+printf '#!/usr/bin/env bash\ncmd | grep -q pat\n' > "$T/outside.sh"
+ln -s "$T/outside.sh" "$T/a/link.sh"
+r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '파일 심링크는 따라가지 않는다'
+rm -f "$T/a/link.sh" "$T/outside.sh"
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.
