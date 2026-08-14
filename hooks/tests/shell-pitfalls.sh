@@ -88,6 +88,12 @@ printf '#!/usr/bin/env bash\nn=$(cmd | grep -c pat)   # -q 를 쓰면 안 된다
 r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '주석 속 -q 언급을 오판하지 않는다'
 rm -f "$T/a/bad.sh"
 
+echo "── PR #91 지적 ──"
+# 인용된 '#' 인자를 주석으로 오인하면 그 뒤 파이프가 거짓 통과한다.
+printf "#!/usr/bin/env bash\nprintf '%%s' '# value' | grep -q value || exit 1\n" > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" "인용된 '#' 인자 뒤의 파이프도 잡는다"
+rm -f "$T/a/bad.sh"
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.

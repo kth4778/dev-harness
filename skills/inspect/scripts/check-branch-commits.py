@@ -63,9 +63,19 @@ def run(args, timeout=None):
         out, _ = p.communicate(timeout=timeout)
         return p.returncode, out
     except subprocess.TimeoutExpired:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
+        # Windows 에는 SIGKILL·killpg·getpgid 가 없다 — 그대로 부르면 시한
+        # 처리 자체가 AttributeError 로 죽어 자식이 산 채로 남는다
+        # (codex, PR #91). 그룹 종료가 없는 플랫폼에서는 프로세스만 죽인다.
+        if hasattr(os, "killpg"):
+            sigs = (signal.SIGTERM, signal.SIGKILL)
+        else:
+            sigs = (signal.SIGTERM,)
+        for sig in sigs:
             try:
-                os.killpg(os.getpgid(p.pid), sig)
+                if hasattr(os, "killpg"):
+                    os.killpg(os.getpgid(p.pid), sig)
+                else:
+                    p.kill()
             except (ProcessLookupError, PermissionError):
                 p.kill()
             try:
@@ -73,6 +83,12 @@ def run(args, timeout=None):
                 break
             except subprocess.TimeoutExpired:
                 continue
+        else:
+            p.kill()
+            try:
+                p.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         return 124, ""
 
 def git(*args, timeout=None):
@@ -350,6 +366,31 @@ INLINE_TEST = re.compile(
 )
 
 
+def blob_matches(spec, regex):
+    """`git show <spec>` 출력을 **줄 스트리밍**으로 훑어 regex 매치 여부를 낸다.
+
+    통째로 읽으면 JAR·이미지 같은 큰 blob 이 전부 메모리에 올라온다 — sh 판의
+    `git show | grep` 은 스트리밍이었으니 회귀였다 (codex, PR #91).
+    매치를 찾으면 그 자리에서 끊는다. 조회 실패는 False 다.
+    """
+    try:
+        p = subprocess.Popen(["git", "show", spec], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, errors="replace")
+    except FileNotFoundError:
+        return False
+    found = False
+    try:
+        for line in p.stdout:
+            if regex.search(line):
+                found = True
+                break
+    finally:
+        p.stdout.close()
+        p.terminate()
+        p.wait()
+    return found
+
+
 def show_names(sha, *extra):
     """커밋의 변경 경로. 실패를 빈 커밋으로 읽지 않는다 (codex, PR #72) —
     부분 클론·객체 손상이면 거짓 PASS 가 된다."""
@@ -391,8 +432,7 @@ def check_commit_shapes(base):
         # 지운 것이다 (codex, PR #66).
         if del_test == 0:
             for df in del_only:
-                rc, blob = git("show", "%s^:%s" % (sha, df))
-                if rc == 0 and INLINE_TEST.search(blob):
+                if blob_matches("%s^:%s" % (sha, df), INLINE_TEST):
                     del_test = 1
                     break
         del_src = sum(1 for f in del_only if not TESTPAT.search(f) and not DOCPAT.search(f))
@@ -412,8 +452,7 @@ def check_commit_shapes(base):
         if has_test == 0 and has_src > 0:
             inline = False
             for f in files:
-                rc, blob = git("show", "%s:%s" % (sha, f))
-                if rc == 0 and INLINE_TEST.search(blob):
+                if blob_matches("%s:%s" % (sha, f), INLINE_TEST):
                     inline = True
                     break
                 # 지워진 표식도 colocated 신호다 — 함께 걷어낸 커밋은 커밋 뒤

@@ -100,7 +100,12 @@ def scan_line(line):
     인용 안의 `|`(예시 문자열)는 자연히 토큰이 아니므로, sh 판처럼 인용을
     지우는 전처리가 필요 없다.
     """
-    lex = shlex.shlex(line, posix=True, punctuation_chars="|;&()")
+    # posix=False — 토큰에 **따옴표가 남는다.** posix 모드는 인용을 벗겨서
+    # `printf '%s' '# value' | …` 의 '# value' 가 맨 # 토큰이 되고, 아래 주석
+    # 판정이 파이프에 닿기 전에 끊어 **거짓 통과**가 났다 (codex, PR #91).
+    # 따옴표가 남으면 인용된 인자는 절대 # 로 시작하지 않는다 — 플래그(-q)는
+    # 인용 없이 쓰이므로 판정에는 영향이 없다.
+    lex = shlex.shlex(line, posix=False, punctuation_chars="|;&()")
     lex.whitespace_split = True
     # `#` 주석 처리를 끈다. 켜 두면 `${dir#./}` 같은 파라미터 확장의 # 에서
     # 줄이 잘려 그 뒤의 `| grep -q` 가 **사라진 채 통과**한다 (codex, PR #89).

@@ -48,9 +48,19 @@ def run(args, timeout=None):
         out, _ = p.communicate(timeout=timeout)
         return p.returncode, out
     except subprocess.TimeoutExpired:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
+        # Windows 에는 SIGKILL·killpg·getpgid 가 없다 — 그대로 부르면 시한
+        # 처리 자체가 AttributeError 로 죽어 자식이 산 채로 남는다
+        # (codex, PR #91). 그룹 종료가 없는 플랫폼에서는 프로세스만 죽인다.
+        if hasattr(os, "killpg"):
+            sigs = (signal.SIGTERM, signal.SIGKILL)
+        else:
+            sigs = (signal.SIGTERM,)
+        for sig in sigs:
             try:
-                os.killpg(os.getpgid(p.pid), sig)
+                if hasattr(os, "killpg"):
+                    os.killpg(os.getpgid(p.pid), sig)
+                else:
+                    p.kill()
             except (ProcessLookupError, PermissionError):
                 p.kill()
             try:
@@ -58,6 +68,12 @@ def run(args, timeout=None):
                 break
             except subprocess.TimeoutExpired:
                 continue
+        else:
+            p.kill()
+            try:
+                p.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         return 124, ""
 
 def git(*args, timeout=None):
