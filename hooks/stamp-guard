@@ -25,7 +25,7 @@ cmd=$(json_field "tool_input.command")
 flat=$(printf '%s' "$cmd" | tr '\n' ' ')
 
 # PR을 만드는 명령에만 건다. 조회·수정은 건드리지 않는다.
-printf '%s' "$flat" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
+[ "$(printf '%s' "$flat" | grep -cE '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || true)" -gt 0 ] || exit 0
 
 # 훅은 명령의 cwd가 아니라 세션 cwd에서 돈다. 그래서 다른 저장소로 PR을 올리는
 # 명령까지 이 저장소의 도장으로 판정한다 — 2026-08-09에 실제로 그렇게 막혔다.
