@@ -57,8 +57,11 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 files=$(git show --format= --name-only HEAD 2>/dev/null) || exit 0
 [ -z "$files" ] && exit 0
 
-printf '%s\n' "$files" | grep -q '/src/main/\|^src/main/' || exit 0
-printf '%s\n' "$files" | grep -q '/src/test/\|^src/test/' && exit 0
+# `grep -q` 를 파이프 뒤에 두지 않는다 — 이 파일엔 pipefail 이 없어 지금은
+# 무해하지만, 누가 관행대로 추가하는 순간 SIGPIPE 가 판정을 뒤집는다.
+# 다른 훅들과 같은 모양(-c, 스트림 끝까지)으로 맞춘다.
+[ "$(printf '%s\n' "$files" | grep -c '/src/main/\|^src/main/' || true)" -gt 0 ] || exit 0
+[ "$(printf '%s\n' "$files" | grep -c '/src/test/\|^src/test/' || true)" -gt 0 ] && exit 0
 
 subject=$(git log -1 --format=%s 2>/dev/null)
 mains=$(printf '%s\n' "$files" | grep '/src/main/\|^src/main/')

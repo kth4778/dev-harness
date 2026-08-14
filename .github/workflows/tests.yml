@@ -1,0 +1,30 @@
+# 시험 357개를 PR 마다 돌린다.
+#
+# 왜 있나: 시험이 저장소에 있는데 돌리는 CI 가 없어서, 시험을 건너뛴 커밋의
+# 회귀를 기계가 못 잡았다 (2026-08-14 점검). 봇 리뷰는 코드를 읽을 뿐
+# 시험을 실행하지 않는다 — 이 둘은 서로 다른 검사 축이다.
+#
+# push(synchronize)에도 돈다. 봇 리뷰와 달리 시험은 몇 번을 돌아도
+# 부작용이 없고, 열린 PR 에 커밋이 얹히는 경우(사람이 직접 작업)를 잡는다.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  run-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # 시험이 가짜 gh 를 PATH 에 심으므로 진짜 gh 는 필요 없다.
+      # git 사용자만 있으면 된다 — fresh() 가 저장소를 만들며 커밋한다.
+      - name: run
+        run: |
+          git config --global user.email ci@ci
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+          bash hooks/tests/run-all.sh
