@@ -41,7 +41,11 @@ rm -f "$T/a/bad.sh"
 r 0 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" 'tests/ 폴더는 검사하지 않는다'
 
 echo "── 실제 저장소 ──"
-r 0 "$(bash "$SCRIPT" >/dev/null 2>&1; echo $?)" '운영 스크립트 전체가 깨끗하다'
+# 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
+# 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.
+repo_out=$(bash "$SCRIPT" 2>&1); repo_rc=$?
+[ "$repo_rc" -eq 0 ] || printf '%s\n' "$repo_out" >&2
+r 0 "$repo_rc" '운영 스크립트 전체가 깨끗하다'
 
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"

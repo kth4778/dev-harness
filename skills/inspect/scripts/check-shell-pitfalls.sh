@@ -39,6 +39,16 @@ for root in "${roots[@]}"; do
         # 자기 자신도 뺀다 — 패턴 문자열이 문서로 들어 있다.
         [ "$(basename "$f")" = "check-shell-pitfalls.sh" ] && continue
 
+        # 셸 스크립트만 본다 — 이름이 *.sh 거나 첫 줄이 sh 셔뱅.
+        # **실행 비트로 고르지 않는다.** 로컬에서 비트가 벗겨진 파일이 검사에서
+        # 빠져, 로컬 PASS·CI FAIL 로 갈렸다(2026-08-14 실물 — stamp-guard 가
+        # 로컬에서 644 였다). 비트는 환경 따라 다르고 셔뱅은 내용이라 같다.
+        case "$f" in
+            *.sh) : ;;
+            *)  first=$(head -n1 "$f" 2>/dev/null || true)
+                case "$first" in '#!'*sh*) : ;; *) continue ;; esac ;;
+        esac
+
         # 주석 줄을 제외하고 파이프 뒤 grep -q 를 찾는다.
         hits=$(grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$f" 2>/dev/null \
                  | grep -vE '^[0-9]+:[[:space:]]*#' || true)
@@ -48,7 +58,7 @@ for root in "${roots[@]}"; do
             fail=1
         fi
     done <<FILES
-$(find "$root" -type f \( -name '*.sh' -o -perm -u+x \) 2>/dev/null | sort)
+$(find "$root" -type f 2>/dev/null | sort)
 FILES
 done
 
