@@ -57,7 +57,7 @@ git rev-parse HEAD > .harness/stamp
 ```bash
 # **대상 프로젝트 루트를 넘긴다.** 인자가 없으면 기본값이 플러그인 자신이라,
 # 설치본에서는 정작 검사하려는 프로젝트를 안 본다 (codex, PR #87).
-bash "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-shell-pitfalls.sh" \
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-shell-pitfalls.py" \
     "$(git rev-parse --show-toplevel)"
 ```
 

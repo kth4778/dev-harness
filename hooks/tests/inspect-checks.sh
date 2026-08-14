@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # skills/inspect/scripts/check-branch-commits.sh 의 갈래를 잰다.
 ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
-SCRIPT="$ROOT/skills/inspect/scripts/check-branch-commits.sh"
+SCRIPT="$ROOT/skills/inspect/scripts/check-branch-commits.py"
 if [ ! -f "$SCRIPT" ]; then
     echo "  [SKIP] $SCRIPT 가 없다 — 훅만 담긴 옛 트리로 보인다"
     exit 0
@@ -54,7 +54,7 @@ fresh() {
     printf 'base\n' > base.txt; git add base.txt; git commit -qm init
     git push -q origin main 2>/dev/null; git remote set-head origin main 2>/dev/null
 }
-out_of() { bash "$SCRIPT" "${1:-main}" 2>&1; }
+out_of() { python3 "$SCRIPT" "${1:-main}" 2>&1; }
 
 # 옛 PR 응답을 만든다. 가짜 gh 가 `-q` 필터를 실제로 돌리므로 소유자가 맞아야
 # 걸린다 — 현재 원격의 소유자를 그대로 넣는다.
@@ -150,7 +150,7 @@ fresh; git switch -qc feature/cur
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
 r 1 "$(GH_UPSTREAM=o/r GH_PRIOR="$(prior 7 OPEN)" out_of >/dev/null 2>&1; echo $?)" \
     'Phase 5 에서는 열린 PR 도 재사용이다'
-r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='' bash "$SCRIPT" main --phase6 7 >/dev/null 2>&1; echo $?)" \
+r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='' python3 "$SCRIPT" main --phase6 7 >/dev/null 2>&1; echo $?)" \
     'Phase 6 에서 넘긴 그 PR 하나는 예외다'
 
 echo "── claude 지적 (PR #53) ──"
@@ -211,7 +211,7 @@ r 0 "$(out_of >/dev/null 2>&1; echo $?)" 'it( 는 테스트로 본다'
 # 원격이 없으면 재사용 검사를 **정말로** 건너뛴다(빈 소유자로 대조하지 않는다).
 fresh; git remote remove origin 2>/dev/null; git switch -qc feature/noremote
 printf 'x\n' > f.txt; printf 't\n' > f_test.txt; git add .; git commit -qm "feat: x"
-r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' bash "$SCRIPT" main >/dev/null 2>&1; echo $?)" \
+r 0 "$(GH_UPSTREAM=o/r GH_PRIOR='{"number":9,"state":"MERGED"}' python3 "$SCRIPT" main >/dev/null 2>&1; echo $?)" \
     '원격이 없으면 재사용 검사를 건너뛴다'
 
 echo "── codex 지적 (PR #56) ──"
@@ -403,9 +403,9 @@ git add .; git commit -qm "feat: 기능을 인라인 테스트째로 걷어낸�
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" '구현과 인라인 테스트를 함께 지운 커밋은 통과한다'
 
 # gh 조회가 한 번이어야 한다 — 두 번 부르면 뒤쪽 실패로 호스트 대조가 꺼진다.
-r 1 "$(grep -c 'json parent,nameWithOwner,url' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'parent,nameWithOwner,url' "$SCRIPT" || true)" \
    'upstream NWO 와 URL 을 한 호출로 받는다'
-r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'json parent,url' || true)" \
+r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c '"parent,url"' || true)" \
    'URL 을 따로 조회하지 않는다'
 
 echo "── codex 지적 (PR #65) ──"
@@ -452,21 +452,24 @@ git commit -qm "feat: 기능 파일을 통째로 걷어낸다"
 r 0 "$(out_of >/dev/null 2>&1; echo $?)" '인라인 테스트가 든 파일을 통째로 지운 커밋은 통과한다'
 
 # PR 이력 조회에 Enterprise 호스트를 붙인다.
-r 1 "$(grep -c 'UP_HOST=$(host_of' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'up_host = host_of' "$SCRIPT" || true)" \
    'PR 이력 조회에 호스트를 붙인다'
-r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'pr list --repo "\$UPSTREAM"' || true)" \
-   '이름만으로 조회하지 않는다'
+r 1 "$(grep -c 'repo_arg = ' "$SCRIPT" || true)" \
+   '이름만으로 조회하지 않는다(호스트를 합성한다)'
 
 # 진단에 자격 증명이 실리면 안 된다.
-r 1 "$(grep -c '^redact()' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
+r 1 "$(grep -c '^def redact' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
 
-# 기본 포트는 떼고 사내 포트는 구분한다. 함수만 뽑아 별도 파일로 읽힌다 —
-# 중첩 heredoc 안에서는 바깥 변수가 안 넘어간다.
-FN=$(mktemp); sed -n '/^host_of()/,/^}/p' "$SCRIPT" > "$FN"
-r "github.com"      "$(. "$FN"; host_of ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
-r "github.com"      "$(. "$FN"; host_of https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
-r "git.ex.com:8443" "$(. "$FN"; host_of https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
-rm -f "$FN"
+# 기본 포트는 떼고 사내 포트는 구분한다 — 함수를 파이썬으로 직접 부른다.
+# sed 로 셸 함수를 추출하던 방식보다 정확하다: 진짜 그 코드를 실행한다.
+hostof() { python3 -c "
+ns = {'__name__': 'test'}
+exec(open('$SCRIPT').read(), ns)
+print(ns['host_of']('$1'))
+"; }
+r "github.com"      "$(hostof ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
+r "github.com"      "$(hostof https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
+r "git.ex.com:8443" "$(hostof https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
 
 echo "── claude 지적 (PR #68) ──"
 # push URL 이 둘이면 **두 번째 소유자**의 옛 PR 도 걸려야 한다.

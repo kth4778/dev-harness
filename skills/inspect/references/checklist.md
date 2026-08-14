@@ -3,7 +3,7 @@
 ### 1·2. 브랜치 전략과 커밋 단위 — 스크립트가 판정한다
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" [통합브랜치]
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.py" [통합브랜치]
 ```
 
 Phase 6 에서 다시 부를 때만 `--phase6 <PR번호>` 를 붙인다 — 그 PR 하나를

@@ -45,7 +45,7 @@ fast-forward 머지와 브랜치를 지운 경우를 못 잡는데, 판정에 �
 대신 두 자리에서 받는다.
 
 - **머지할 때 브랜치를 같이 지운다** — Phase 6 `pr` 스킬의
-  `skills/pr/scripts/merge-cleanup.sh` 가 머지하고 이어서 지운다. 재사용할
+  `skills/pr/scripts/merge-cleanup.py` 가 머지하고 이어서 지운다. 재사용할
   브랜치 자체를 안 남기는 것이 판정보다 확실하다.
 
   **`gh pr merge --delete-branch` 를 손으로 쓰지 않는다.** 그 플래그는 머지
