@@ -59,7 +59,8 @@ git rev-parse HEAD > .harness/stamp
 대상이다. 그 자리에서 뽑는다:
 
 ```bash
-grep -E '^## ' RULES.md | grep -vE '^## [0-9]+\.'
+# 설치본에서는 작업 폴더가 대상 프로젝트다 — 상대 경로면 없는 파일이 된다.
+grep -E '^## ' "${CLAUDE_PLUGIN_ROOT}/RULES.md" | grep -vE '^## [0-9]+\.'
 ```
 
 절마다 「이번 변경이 이 절에 해당하는 작업이었나」를 묻고, 해당하면 지켰는지
