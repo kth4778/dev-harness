@@ -3,7 +3,7 @@
 #
 # gh 를 가짜로 갈아끼워 네트워크 없이 돌린다 — 진짜 PR 을 건드리지 않는다.
 ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
-SCRIPT="$ROOT/skills/pr/scripts/merge-cleanup.sh"
+SCRIPT="$ROOT/skills/pr/scripts/merge-cleanup.py"
 if [ ! -f "$SCRIPT" ]; then
     echo "  [SKIP] $SCRIPT 가 없다 — 훅만 담긴 옛 트리로 보인다"
     exit 0
@@ -108,7 +108,7 @@ fresh() {
 }
 # PR head SHA 는 로컬 HEAD 와 같아야 통과한다. 시험이 그 값을 맞춰 준다.
 run() { CLEANUP_WAIT_SEC=2 CLEANUP_POLL_SEC=1 GH_OID="${GH_OID:-$(git rev-parse HEAD)}" \
-    bash "$SCRIPT" 1 2>&1; }
+    python3 "$SCRIPT" 1 2>&1; }
 
 echo "── 정상 경로 ──"
 fresh; out=$(run); rc=$?
@@ -135,6 +135,13 @@ r 1 "$rc" '명령이 성공해도 상태가 OPEN 이면 멈춘다'
 r "feature/x" "$(git branch --show-current)" '열린 PR 의 브랜치를 안 지운다'
 fresh; out=$(GH_STATE=CLOSED run); rc=$?
 r 1 "$rc" '닫혔으면 정리하지 않는다'
+
+echo "── 빈 환경 변수는 기본값으로 ──"
+# 빈 문자열로 export 된 CLEANUP_*_SEC 가 int() 에서 죽으면, 머지는 이미 끝난
+# 뒤라 정리만 중단된 반쪽 상태가 남는다 — sh 판의 ${VAR:-기본} 과 같게 본다.
+fresh; out=$(CLEANUP_WAIT_SEC="" CLEANUP_POLL_SEC="" GH_OID="$(git rev-parse HEAD)" \
+    python3 "$SCRIPT" 1 2>&1); rc=$?
+r 0 "$rc" '빈 CLEANUP_*_SEC 는 기본값으로 돈다'
 
 echo "── 조회 실패를 삼키지 않는다 ──"
 fresh; out=$(GH_VIEW_RC=1 run); rc=$?
@@ -252,7 +259,7 @@ r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'force-with-lease' || true)"
 # 대조와 삭제가 한 동작이 된다. 명령줄만 본다(주석은 세지 않는다).
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'git branch -D' || true)" \
    '로컬 삭제에 git branch -D 를 쓰지 않는다'
-r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'update-ref -d' || true)" \
+r 1 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c '"update-ref", "-d"' || true)" \
    '로컬 삭제를 리뷰된 SHA 에 원자적으로 묶는다'
 
 echo "── codex 지적 (PR #59) ──"
@@ -267,7 +274,7 @@ r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'REQUIRED_BOTS' || true)" \
    '스크립트가 REQUIRED_BOTS 를 읽지 않는다'
 
 # 다른 worktree 가 체크아웃한 브랜치는 지우지 않는다.
-r 1 "$(grep -c 'git worktree list' "$SCRIPT" || true)" \
+r 1 "$(grep -c '"worktree", "list"' "$SCRIPT" || true)" \
    '삭제 전에 worktree 사용 여부를 본다'
 
 # 빠른 명령마다 1초를 버리면 안 된다.
@@ -297,9 +304,9 @@ r 1 "$(grep -c 'remove-section' "$SCRIPT" || true)" \
 # 이제 PR URL 에서 호스트를 한 번 뽑아(API_HOST) 그것을 재사용한다.
 # PR URL 도 push URL 과 **같은 함수**로 푼다 — 따로 짠 정규식은 로컬 경로에서
 # 다른 답을 내서 비교가 어긋났다.
-r 1 "$(grep -c 'API_NWO=$(url_nwo "$PR_BASEURL")' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'api_nwo = url_nwo(pr_baseurl)' "$SCRIPT" || true)" \
    'PR 저장소를 url_nwo 로 푼다'
-r 1 "$(grep -c 'API_HOST=$(url_host "$PR_BASEURL")' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'api_host = url_host(pr_baseurl)' "$SCRIPT" || true)" \
    'PR 호스트를 url_host 로 푼다'
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'API_HOST=$(printf' || true)" \
    '호스트를 따로 짠 정규식으로 뽑지 않는다'
@@ -308,8 +315,11 @@ echo "── codex 지적 (PR #61) ──"
 # Enterprise 에 있는 PR 은 gh api 기본 호스트(github.com)로 조회하면 증거를
 # 못 봐서 **항상** 막힌다. 네 조회 전부에 호스트를 넘겨야 한다.
 # 호스트가 있을 때만 넘긴다 — 로컬 경로 PR 에는 호스트가 없다.
-r 4 "$(grep -c 'gh api ${API_HOST:+--hostname' "$SCRIPT" || true)" \
-   'gh api 조회 전부에 PR 호스트를 넘긴다(있을 때만)'
+r 1 "$(grep -c '\"--hostname\", api_host' "$SCRIPT" || true)" \
+   'gh api 헬퍼가 PR 호스트를 넘긴다(있을 때만)'
+for path in 'pulls/%s/reviews' 'pulls/%s/comments' 'issues/%s/comments' 'issues/%s/reactions'; do
+    r 1 "$(grep -c "$path" "$SCRIPT" || true)" "「$path」 조회가 있다(전부 헬퍼 경유)"
+done
 
 # `claude[bot]` 은 파일명 패턴이기도 하다 — 인용 없이 확장하면 파일명으로 바뀐다.
 fresh
@@ -324,7 +334,7 @@ r 0 "$rc" '작업 폴더에 claudeb 같은 파일이 있어도 봇 로그인이 
 # 짧은 이름은 ref 이름의 **끝부분**에도 맞는다 — 전체 ref 로 조회해야 한다.
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'ls-remote --exit-code --heads' || true)" \
    'ls-remote 를 짧은 이름으로 조회하지 않는다'
-r 1 "$(grep -c 'refs/heads/\$BR" > "\$RLS"' "$SCRIPT" || true)" \
+r 1 "$(grep -c '"ls-remote", "--exit-code", u, "refs/heads/' "$SCRIPT" || true)" \
    'ls-remote 에 전체 ref 를 넘긴다'
 
 # `https://host/me/work.git/` 같은 URL 도 me/work 로 모여야 한다.
@@ -360,7 +370,7 @@ r "feature/x" "$(git branch --show-current)" '그때는 아무것도 안 지운�
 # `git pull` 은 --no-write-fetch-head 를 못 받는다 — 쓰지 않아야 한다.
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'git pull' || true)" \
    'git pull 을 쓰지 않는다(FETCH_HEAD 를 덮어쓴다)'
-r 1 "$(grep -c 'merge --ff-only' "$SCRIPT" || true)" \
+r 1 "$(grep -c '"merge", "--ff-only"' "$SCRIPT" || true)" \
    'fetch 와 fast-forward 로 나눈다'
 
 # 원격 브랜치 조회는 push URL 로 한다 — 이름은 fetch URL 을 본다.
@@ -368,7 +378,7 @@ r 1 "$(grep -c 'merge --ff-only' "$SCRIPT" || true)" \
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
          | grep -c 'ls-remote --exit-code "\$HEAD_REMOTE"' || true)" \
    '원격 브랜치를 이름(fetch URL)으로 조회하지 않는다'
-r 1 "$(grep -c 'ls-remote --exit-code "\$u"' "$SCRIPT" || true)" \
+r 1 "$(grep -c '"ls-remote", "--exit-code", u,' "$SCRIPT" || true)" \
    '원격 브랜치를 push URL 마다 조회한다'
 
 # 삼각 워크플로: fetch 와 push URL 이 다르면 push 쪽을 봐야 한다.
@@ -396,7 +406,7 @@ r "feature/x" "$(git branch --show-current)" '그때는 로컬 브랜치도 그�
 #
 # 이 상황은 스크립트가 도는 **중간에** 다른 worktree 가 끼어드는 것이라 실행으로
 # 재현할 수 없다. 코드에서 두 검사의 순서를 잰다.
-wt_line=$(grep -n 'git worktree list' "$SCRIPT" | awk -F: 'NR==1{print $1}')
+wt_line=$(grep -n '"worktree", "list"' "$SCRIPT" | awk -F: 'NR==1{print $1}')
 del_line=$(grep -n 'force-with-lease' "$SCRIPT" | awk -F: 'NR==1{print $1}')
 r y "$([ -n "$wt_line" ] && [ -n "$del_line" ] && [ "$wt_line" -lt "$del_line" ] \
         && echo y || echo n)" \
@@ -419,14 +429,14 @@ r 0 "$(git ls-remote --heads "$R/mirror/me/work" feature/x | grep -c . || true)"
 
 # 모든 사전 검사가 원격 삭제보다 앞에 있어야 부분 정리가 안 난다.
 del_line=$(grep -n 'force-with-lease' "$SCRIPT" | awk -F: 'NR==1{print $1}')
-for chk in 'git worktree list' 'NOW_OID=' 'ls-remote --exit-code'; do
+for chk in '"worktree", "list"' 'now_oid = ' '"ls-remote", "--exit-code"'; do
     ln=$(grep -n "$chk" "$SCRIPT" | awk -F: 'NR==1{print $1}')
     r y "$([ -n "$ln" ] && [ "$ln" -lt "$del_line" ] && echo y || echo n)" \
        "「$chk」 검사가 원격 삭제보다 앞에 있다"
 done
 
 # 진단에 자격 증명이 실리면 안 된다.
-r 1 "$(grep -c '^redact()' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
+r 1 "$(grep -c '^def redact' "$SCRIPT" || true)" 'URL 을 가리는 함수가 있다'
 r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'die "원격 $u' || true)" \
    '원본 URL 을 그대로 진단에 싣지 않는다'
 
@@ -440,13 +450,15 @@ out=$(run); rc=$?
 r 0 "$rc" '같은 push URL 이 두 번 있어도 정상 경로가 돈다'
 r "" "$(git branch --list feature/x)" '로컬까지 정리됐다'
 
-# 기본 포트는 떼고 사내 포트는 구분한다. 함수만 뽑아 별도 파일로 읽힌다 —
-# 중첩 heredoc 안에서는 바깥 변수가 안 넘어간다.
-FN=$(mktemp); sed -n '/^url_host()/,/^}/p' "$SCRIPT" > "$FN"
-r "github.com"      "$(. "$FN"; url_host ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
-r "github.com"      "$(. "$FN"; url_host https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
-r "git.ex.com:8443" "$(. "$FN"; url_host https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
-rm -f "$FN"
+# 기본 포트는 떼고 사내 포트는 구분한다 — 함수를 파이썬으로 직접 부른다.
+urlhost() { python3 -c "
+ns = {'__name__': 'test'}
+exec(open('$SCRIPT').read(), ns)
+print(ns['url_host']('$1'))
+"; }
+r "github.com"      "$(urlhost ssh://git@github.com:22/me/w.git)" 'ssh 기본 포트 22 를 뗀다'
+r "github.com"      "$(urlhost https://github.com:443/me/w)"      'https 기본 포트 443 을 뗀다'
+r "git.ex.com:8443" "$(urlhost https://git.ex.com:8443/me/w)"     '사내 포트는 남긴다'
 
 echo "── codex 지적 (PR #67) ──"
 # 커밋되지 않은 변경이 있으면 **머지 전에** 멈춘다. 안 그러면 서버만 머지되고
@@ -468,7 +480,7 @@ out=$(run); rc=$?
 r 1 "$rc" '추적 파일이 바뀐 경우도 멈춘다'
 
 # 대조용 호스트도 push URL 과 같은 규칙으로 정규화해야 한다.
-r 1 "$(grep -c 'GH_HOST=$(url_host "$PR_URL")' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'gh_host = url_host(pr_url)' "$SCRIPT" || true)" \
    '대조용 호스트를 url_host 로 정규화한다'
 
 echo "── codex 지적 (PR #68) ──"
@@ -477,9 +489,9 @@ r 0 "$(grep -v '^[[:space:]]*#' "$SCRIPT" \
          | grep -c 'git status --porcelain 2>/dev/null | grep -c' || true)" \
    'status 를 파이프로만 세지 않는다'
 # 머지 **앞뒤로** 두 번 본다 — 큐를 기다리는 20분 사이에 편집기가 건드릴 수 있다.
-r 2 "$(grep -c 'die "작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
+r 2 "$(grep -c '작업 트리 상태를 못 읽었다' "$SCRIPT" || true)" \
    'status 조회 실패를 두 자리 다 멈춤으로 다룬다'
-r 1 "$(grep -c 'die "머지 뒤에 작업 트리가 더러워졌다' "$SCRIPT" || true)" \
+r 1 "$(grep -c '머지 뒤에 작업 트리가 더러워졌다' "$SCRIPT" || true)" \
    '머지 뒤에도 작업 트리를 다시 본다'
 
 echo "── codex 지적 (PR #69) ──"
@@ -500,13 +512,13 @@ out=$(GH_MERGE_RC=1 run); rc=$?
 r 1 "$rc" '어느 전략으로도 안 되면 멈춘다'
 
 # worktree 조회 자체가 실패하면 「없음」으로 읽지 않는다.
-r 1 "$(grep -c 'die "worktree 목록을 못 읽었다' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'worktree 목록을 못 읽었다' "$SCRIPT" || true)" \
    'worktree 조회 실패를 멈춤으로 다룬다'
 
 # 시한 초과 때 자식까지 죽인다 — git 이 띄운 ssh 가 남으면 안 된다.
-r 1 "$(grep -c 'kill -TERM "-\$pid"' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'os.killpg' "$SCRIPT" || true)" \
    '프로세스 그룹 전체에 TERM 을 보낸다'
-r 1 "$(grep -c 'kill -KILL "-\$pid"' "$SCRIPT" || true)" \
+r 1 "$(grep -c 'signal.SIGTERM, signal.SIGKILL' "$SCRIPT" || true)" \
    '프로세스 그룹 전체에 KILL 을 보낸다'
 
 echo "── codex 지적 (PR #70) ──"

@@ -187,7 +187,7 @@ PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기�
 ```bash
 BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록마다 다시 정한다)
 [ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" "$BASE" --phase6 <PR번호>
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.py" "$BASE" --phase6 <PR번호>
 ```
 
 **`--phase6 <PR번호>` 를 넘긴다.** 안 넘기면 지금 열린 이 PR 이 「이 브랜치로
@@ -229,7 +229,7 @@ BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록�
 ### 🔴 머지와 정리는 스크립트로 한다
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts/merge-cleanup.sh" <PR번호>
+"${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts/merge-cleanup.py" <PR번호>
 ```
 
 **`${CLAUDE_PLUGIN_ROOT}` 를 붙인다.** 설치본으로 쓰면 작업 폴더는 대상
@@ -280,7 +280,7 @@ BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록�
 
 **문서 저장소(위키)는 스쿼시가 맞다.** 거기는 커밋 단위가 판정 대상이 아니다.
 
-**머지 뒤에 손으로 더 할 것이 없다.** `merge-cleanup.sh` 가 통합 브랜치로 옮기고,
+**머지 뒤에 손으로 더 할 것이 없다.** `merge-cleanup.py` 가 통합 브랜치로 옮기고,
 검증한 원격에서 갱신하고, 원격·로컬 브랜치와 그 설정까지 지운다.
 
 예전에는 여기에 수동 정리 블록이 있었는데 **걷어냈다**(2026-08-13, codex).

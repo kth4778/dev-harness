@@ -44,6 +44,13 @@
 테스트도 안 되므로 틀린 서술에 아무 신호가 없다 — 그래서 매번 전수로 본다.
 남의 영역에서 찾은 것은 손대지 않고 채팅으로 보고한다.
 
+## 요구 사항
+
+- git · gh(GitHub CLI)
+- **python3 (3.9+)** — Phase 5 검사와 Phase 6 정리 스크립트가 파이썬이다
+  (2026-08-14 이식). 없으면 그 두 단계가 돌지 않는다. macOS·리눅스에는 대개
+  있고, Windows 는 python.org 판이나 `winget install python` 으로 설치한다
+
 ## 훅 7개 — 되돌릴 수 없는 것만 막는다
 
 | 훅 | 이벤트 | 막는 것 |
@@ -227,14 +234,14 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                시험 372개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 396개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
   harness-design/                 Phase 3 (+ references: 패턴 6종, 에이전트 템플릿)
   build/ tdd-java/                Phase 4
   inspect/ pr/ retro/ wrap/       Phase 5~8 (pr references: 봇 리뷰 대응, 위키 반영)
-    pr/scripts/merge-cleanup.sh   머지 + 브랜치 정리 — 문서가 아니라 스크립트다
+    pr/scripts/merge-cleanup.py   머지 + 브랜치 정리 — 문서가 아니라 스크립트다
     inspect/scripts/…             브랜치·커밋 판정 — 같은 이유로 스크립트다
 templates/                        CLAUDE.md 2층·3층 골격
 ```
