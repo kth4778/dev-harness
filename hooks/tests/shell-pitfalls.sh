@@ -94,6 +94,30 @@ printf "#!/usr/bin/env bash\nprintf '%%s' '# value' | grep -q value || exit 1\n"
 r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" "인용된 '#' 인자 뒤의 파이프도 잡는다"
 rm -f "$T/a/bad.sh"
 
+echo "── PR #93 지적 ──"
+# 단어 중간에서 시작하는 인용 — shlex(posix=False)는 인용 진입을 토큰 시작에서만
+# 인식해, 대입문 값 속의 파이프가 실 토큰으로 나와 정상 스크립트를 거짓 차단했다.
+printf '#!/usr/bin/env bash\nMSG="do not: cmd | grep -q pat"\nprintf %%s "$MSG"\n' > "$T/a/bad.sh"
+r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '단어 중간 인용(VAR="…") 예시를 오인하지 않는다'
+
+printf "#!/usr/bin/env bash\nlog --msg='never: cmd | grep -q pat'\n" > "$T/a/bad.sh"
+r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" "단어 중간 인용(--msg='…')도 오인하지 않는다"
+
+# 차단 갈래도 함께 잰다(승격 규칙 ⑤) — 인용 밖의 진짜 파이프는 여전히 잡는다.
+printf '#!/usr/bin/env bash\necho "x" | grep -q x || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '인용 인자가 있어도 인용 밖 파이프는 잡는다'
+rm -f "$T/a/bad.sh"
+
+# 자기 제외가 접두사 매칭이면 이름을 흉내 낸 운영 스크립트가 검사를 빠져나간다.
+printf '#!/usr/bin/env bash\ncmd | grep -q pat\n' > "$T/a/check-shell-pitfalls.legacy.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '자기 이름을 흉내 낸 파일은 빼지 않는다'
+rm -f "$T/a/check-shell-pitfalls.legacy.sh"
+
+# CP949 콘솔 대비 — 쌍둥이 두 파일에는 있는데 이 파일에만 빠져 PASS 출력의
+# U+2014 에서 죽었다. 형태로 잰다(출력 인코딩은 환경 의존이라 재현이 안 된다).
+n=$(grep -c 'reconfigure' "$SCRIPT" || true)
+r 1 "$([ "$n" -ge 1 ] && echo 1 || echo 0)" 'CP949 대비 스트림 reconfigure 가 있다'
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.

@@ -9,8 +9,17 @@
 
 왜 파이썬인가 (2026-08-14, 이식):
   셸 판(sh)은 인용·플래그 위치를 정규식으로 흉내내다 네 라운드 연속 지적을
-  받았다. 여기서는 shlex — 진짜 셸 토크나이저 — 로 논리 줄을 토큰화하므로
-  인용 안의 예시 문자열, 플래그 순서, 결합 플래그가 **문법 수준에서** 갈린다.
+  받았다. 파이썬 판은 논리 줄을 토큰화해 인용 안의 예시 문자열, 플래그 순서,
+  결합 플래그를 **문법 수준에서** 가른다.
+
+왜 shlex 가 아닌가 (2026-08-14, PR #93):
+  shlex 는 어느 모드든 셸과 어긋났다 — posix=True 는 인용을 벗겨 '# value' 를
+  주석으로 오인했고(PR #91), posix=False 는 인용 진입을 토큰 시작에서만
+  인식해 VAR="… | grep -q …" 의 인용 안 파이프를 실 토큰으로 냈다. 미세조정
+  네 번(#89 commenters, #90 인접 구두점, #91 posix, #93 중간 인용) 만에
+  접근을 바꾼다(승격 규칙: 같은 데를 세 번 고치면 판정/도구 포기를 검토) —
+  아래 tokenize() 는 필요한 셸 규칙(인용·백슬래시·주석·메타문자)만 문자
+  단위로 그대로 구현한 ~40줄 스캐너다.
 
 잡는 것:
   - 파이프 뒤 `grep -q` (주석 줄 제외) — 어느 위치·어느 표기든
@@ -26,8 +35,16 @@
 """
 import os
 import re
-import shlex
 import sys
+
+# Windows CP949 콘솔은 출력 문구의 U+2014 를 인코딩하지 못해 성공한 검사까지
+# 죽는다(PR #92 P1). 쌍둥이(check-branch-commits·merge-cleanup)와 같은 블록 —
+# 문구는 그대로 두고 스트림이 표현 못 하는 글자만 ? 로 바꾼다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except AttributeError:
+        pass
 
 # 대상 프로젝트 루트를 통째로 받을 수 있으므로 남의 코드 무더기도 뺀다.
 # tests/ 는 의도적으로 함정을 담아 두는 자리다.
@@ -93,49 +110,71 @@ def is_quiet_grep_segment(tokens):
     return False
 
 
-def scan_line(line):
-    """논리 줄 하나에 「파이프 뒤 quiet grep」이 있으면 참.
+def tokenize(line):
+    """셸 인용 규칙대로 논리 줄을 단어·연산자 토큰으로 가른다.
 
-    shlex 에 punctuation_chars 를 주면 `|`·`;`·`&` 가 **별도 토큰**이 된다 —
-    인용 안의 `|`(예시 문자열)는 자연히 토큰이 아니므로, sh 판처럼 인용을
-    지우는 전처리가 필요 없다.
+    지켜야 했던 셸 규칙 네 가지 — 전부 shlex 로 밟았던 자리다:
+      - 인용은 **단어 어느 위치에서든** 시작한다. VAR="…" 나 --msg='…' 의
+        값 속 파이프는 리터럴이다 (claude, PR #93 — posix=False 는 토큰
+        시작에서만 인용을 인식해 거짓 차단이 났다)
+      - 따옴표는 토큰에 **남긴다.** 벗기면 '# value' 가 주석으로 오인된다
+        (codex, PR #91)
+      - `#` 는 인용 밖 **단어 시작**에서만 주석이다. `${dir#./}` 의 # 는
+        값의 일부다 (codex, PR #89)
+      - 메타문자 `| ; & ( )` 는 공백 없이 붙어도 경계다. `$(cmd)|grep` 의
+        `)|` 가 한 덩어리로 묶이면 파이프가 사라진다 (claude, PR #90)
     """
-    # posix=False — 토큰에 **따옴표가 남는다.** posix 모드는 인용을 벗겨서
-    # `printf '%s' '# value' | …` 의 '# value' 가 맨 # 토큰이 되고, 아래 주석
-    # 판정이 파이프에 닿기 전에 끊어 **거짓 통과**가 났다 (codex, PR #91).
-    # 따옴표가 남으면 인용된 인자는 절대 # 로 시작하지 않는다 — 플래그(-q)는
-    # 인용 없이 쓰이므로 판정에는 영향이 없다.
-    lex = shlex.shlex(line, posix=False, punctuation_chars="|;&()")
-    lex.whitespace_split = True
-    # `#` 주석 처리를 끈다. 켜 두면 `${dir#./}` 같은 파라미터 확장의 # 에서
-    # 줄이 잘려 그 뒤의 `| grep -q` 가 **사라진 채 통과**한다 (codex, PR #89).
-    # 줄 전체 주석은 위에서 이미 걸렀고, 줄 끝 주석 속 파이프가 오탐될 수는
-    # 있지만 — 거짓 차단은 사람이 보고, 거짓 통과는 이력에 남는다.
-    lex.commenters = ""
-    try:
-        tokens = list(lex)
-    except ValueError:
-        # 닫히지 않은 인용 등 — 셸 문법이 아닌 파일일 수 있다. 판정하지
-        # 않고 넘기면 거짓 통과가 되므로, 논리 줄 원문으로 보수적으로 본다.
-        return bool(re.search(r"\|\s*grep\s+[^|;&]*(-[A-Za-z]*q|--quiet|--silent)", line))
-    # 인접 구두점을 문자 단위로 푼다. shlex 는 연속된 punctuation_chars 를
-    # 한 토큰으로 묶으므로 `$(cmd)|grep -q` 의 `)|` 가 delimiter 집합의 어느
-    # 원소와도 안 맞아 **파이프가 통째로 사라졌다** (claude, PR #90).
-    flat = []
-    for t in tokens:
-        if t and all(c in "|;&()" for c in t) and t not in {"&&", "||"}:
-            flat.extend(t)
+    tokens, word = [], []
+    quote = None  # 열려 있는 인용부호 — "'" 또는 '"'
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote:
+            word.append(c)
+            if quote == '"' and c == "\\" and i + 1 < n:
+                i += 1
+                word.append(line[i])  # \" 가 닫는 따옴표로 읽히지 않게
+            elif c == quote:
+                quote = None
+        elif c == "\\":
+            word.append(c)
+            if i + 1 < n:
+                i += 1
+                word.append(line[i])
+        elif c in "'\"":
+            quote = c
+            word.append(c)
+        elif c == "#" and not word:
+            break
+        elif c in "|&;()":
+            if word:
+                tokens.append("".join(word))
+                word = []
+            if c in "|&" and i + 1 < n and line[i + 1] == c:
+                tokens.append(c + c)  # || 와 && 는 파이프가 아니다
+                i += 1
+            else:
+                tokens.append(c)
+        elif c.isspace():
+            if word:
+                tokens.append("".join(word))
+                word = []
         else:
-            flat.append(t)
+            word.append(c)
+        i += 1
+    if word:
+        # 닫히지 않은 인용 포함 — 남은 것을 단어로 낸다. 여러 줄 문자열의
+        # 뒷줄이 코드처럼 보이면 오탐이 날 수 있지만, 거짓 차단은 사람이
+        # 보고 거짓 통과는 이력에 남는다.
+        tokens.append("".join(word))
+    return tokens
+
+
+def scan_line(line):
+    """논리 줄 하나에 「파이프 뒤 quiet grep」이 있으면 참."""
     seg = []
     prev_pipe = False
-    for t in flat:
-        # 독립 토큰으로 나온 `#` 부터는 진짜 줄 끝 주석이다 — 셸 규칙과 같다
-        # (# 는 **단어 시작**에서만 주석이고, `${dir#./}` 처럼 단어 중간이면
-        # 값의 일부다). commenters 를 끈 대가로 주석 속 `-q` 가 grep 세그먼트에
-        # 흡수돼 정상 `grep -c` 를 오판했다 (claude, PR #90). 여기서 끊는다.
-        if t.startswith("#"):
-            break
+    for t in tokenize(line):
         if t in {"|", ";", "&", "&&", "||", "(", ")"}:
             if prev_pipe and is_quiet_grep_segment(seg):
                 return True
@@ -165,8 +204,10 @@ def iter_files(root):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for name in sorted(filenames):
-            # 자기 자신(sh 시절 포함)은 뺀다 — 패턴 문자열이 문서로 들어 있다.
-            if name.startswith("check-shell-pitfalls."):
+            # 자기 자신(sh 시절 포함)만 뺀다 — 패턴 문자열이 문서로 들어 있다.
+            # 접두사로 빼면 이름을 흉내 낸 운영 스크립트(*.legacy.sh 등)까지
+            # 검사를 빠져나간다 (codex, PR #93).
+            if name in {"check-shell-pitfalls.py", "check-shell-pitfalls.sh"}:
                 continue
             yield os.path.join(dirpath, name)
 
