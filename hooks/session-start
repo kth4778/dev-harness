@@ -52,19 +52,38 @@ read_or_empty() {
     [ -f "$1" ] && cat "$1" 2>/dev/null || printf ''
 }
 
-# 규칙은 제목 10줄만 주입한다. 전문은 필요할 때 읽는다 — 조문이 실제로
+# 규칙은 **제목만** 주입한다. 전문은 필요할 때 읽는다 — 조문이 실제로
 # 필요한 자리는 inspect의 판정 한 번인데, 그 6KB를 매 세션 밀어넣고 있었다.
 #
-# 제목 추출에 실패하면(형식이 바뀌었거나 파일이 없으면) 전문으로 되돌린다.
-# 규칙이 조용히 사라지는 것보다 길게 들어가는 편이 안전하다.
-rules=$(grep -E '^## [0-9]+\.' "${PLUGIN_ROOT}/RULES.md" 2>/dev/null | sed 's/^## /  /')
-if [ "$(printf '%s\n' "$rules" | grep -c .)" -lt 10 ]; then
+# 번호 규칙 10개 + **승격된 번호 없는 절** 전부를 뽑는다. 번호만 뽑으면
+# 회고에서 승격한 규칙이 세션에 주입되지 않아 **승격이 무효가 된다**
+# (codex, PR #76).
+rules=$(grep -E '^## ' "${PLUGIN_ROOT}/RULES.md" 2>/dev/null | sed 's/^## /  /')
+# **종류별로 검증한다.** 번호 규칙은 형식이 고정이니 정확히 10개인지 보고,
+# 승격 절은 최소 1개 있는지 본다. 어긋나면 전문으로 되돌린다.
+#
+# **이것이 잡는 것과 못 잡는 것** (codex·claude, PR #79·#80):
+#   잡는다   — 번호 규칙 파손, 승격 절 전멸, 파일 유실
+#   못 잡는다 — 승격 절 **하나**가 ### 로 강등되는 것. 기대 개수가 파일에
+#              없어 기계로는 판별할 수 없다(번호 하위에도 ### 절이 정상으로
+#              많다). 그래서 retro 스킬이 승격 때 ## 형식을 확인하고,
+#              RULES.md 를 고치는 PR 은 봇 리뷰가 본다.
+# 개수가 아니라 **식별자 집합**을 본다. 개수만 세면 `## 10.` 이 `## 9.` 로
+# 바뀌어도 10개라 통과하는데, 세션에는 9번이 겹치고 10번이 없어 다른 문서의
+# 「규칙 10」 참조가 해석 불능이 된다 (codex, PR #81).
+ids=$(printf '%s\n' "$rules" | grep -oE '^  [0-9]+\.' | tr -dc '0-9\n' | sort -n | tr '\n' ' ')
+promoted=$(printf '%s\n' "$rules" | grep -c . || true)
+promoted=$(( promoted - $(printf '%s\n' "$rules" | grep -cE '^  [0-9]+\.' || true) ))
+if [ "$ids" != "1 2 3 4 5 6 7 8 9 10 " ] || [ "$promoted" -lt 1 ]; then
     rules=$(read_or_empty "${PLUGIN_ROOT}/RULES.md")
     rules_note="(제목 추출 실패 — 전문을 넣었다)"
+    # 방금 실패한 카운트를 배너에 쓰면 안 된다 (claude, PR #81).
+    rules_label="규칙 전문"
 else
     rules_note="전문: ${PLUGIN_ROOT}/RULES.md
 제목만으로 판단이 서지 않으면 **반드시 연다.** 특히 inspect의 10개 판정,
 그리고 '이건 규칙 몇 번에 걸리나'를 따질 때."
+    rules_label="절대 규칙 10개 + 승격 규칙 ${promoted}개"
 fi
 
 bootstrap=$(read_or_empty "${PLUGIN_ROOT}/skills/bootstrap/SKILL.md")
@@ -118,7 +137,7 @@ escape_for_json() {
 context="<EXTREMELY_IMPORTANT>
 이 프로젝트는 개발 하네스를 따른다. 아래 세 가지가 이 세션의 전제다.
 
-═══ 절대 규칙 10개 ═══
+═══ ${rules_label} ═══
 
 $(printf '%s' "$rules")
 
