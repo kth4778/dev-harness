@@ -13,7 +13,7 @@
 | 2 | 계획 — 파일 경로·코드·검증 명령까지 | `plan` | 사용자 수락 |
 | 3 | 하네스 설계 — 이 기능에 맞는 에이전트 팀 | `harness-design` | 사용자 승인 |
 | 4 | 개발 — TDD, 태스크마다 리뷰 | `build` · `tdd-java` | 모든 태스크 완료 |
-| 5 | 전수 검사 — 규칙 10개 + 서버 실제 기동 + **README 동기화** | `inspect` | **전부 PASS** |
+| 5 | 전수 검사 — 규칙 10개 + **왕복 이력 접기** + 서버 실제 기동 + **README 동기화** | `inspect` | **전부 PASS** |
 | 6 | PR — 봇 2개 리뷰 + **지식 위키 반영** | `pr` | 머지 |
 | 7 | 회고 — 실수를 규칙으로 승격 | `retro` | 사용자 판단 |
 | 8 | 세션 마감 — 기록하고 **CLAUDE.md 최신화**하고 자리 비우기 | `wrap` | 자리 확인 |
@@ -45,7 +45,7 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 | 훅 | 이벤트 | 막는 것 |
 |---|---|---|
 | `session-start` | SessionStart | (차단 없음) 규칙 **제목** + 워크플로우 + 2층 CLAUDE.md + 3층 **경로** 주입 |
-| `pr-guard` | PreToolUse(Bash) | `gh pr review` · `gh pr comment` — 사람 계정 리뷰 (규칙 10) |
+| `pr-guard` | PreToolUse(Bash) | 사람 계정으로 PR에 리뷰·코멘트를 쓰는 명령 (규칙 10). 봇 호출 토큰만 통과 — 본문을 떼어내지 않고 **명령줄 전체가 허용 형태와 같은지** 본다. 파일로 넘기는 형태·탭·개행은 막는다. 명령을 찾을 때 공백을 고르므로 낱말 사이에 탭을 넣어도 못 뚫는다. API 호출은 필드 플래그가 하나라도 붙으면 막는다(조회는 통과) |
 | `commit-guard` | PreToolUse(Bash) | 보호 브랜치 커밋(1) · AI 파일 커밋(9) · 실행 비트 없는 훅 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `secret-guard` | PreToolUse(Bash) | 시크릿(AWS 키·토큰·개인키)이 든 커밋 — 인덱스와 워킹트리를 **둘 다** 본다 |
 | `workspace-guard` | PreToolUse(Write\|Edit) | `_archive/` 수정 · 에이전트 정의 덮어쓰기 |
@@ -71,6 +71,23 @@ Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 
 규칙 2(테스트를 마친 커밋)는 사라진 게 아니라 **훅에서 사람의 판단으로
 옮겼다.** `inspect`가 커밋을 하나씩 체크아웃해 실제로 돌려본다.
+
+
+### 넣었다가 뺀 것 (2026-08-11) — 머지된 브랜치 재사용 차단
+
+만들어 붙였다가 **두 라운드 만에 걷었다.** 위 기준을 스스로 어긴 사례라 남긴다.
+
+| 왜 뺐나 | |
+|---|---|
+| **커버리지가 좁다** | squash 머지 · fast-forward 머지 · 머지하며 브랜치 삭제 · single-branch clone — 전부 못 잡는다. 잡는 건 「no-ff + 브랜치 남김 + fetch됨」뿐이다 |
+| **판정이 수렴하지 않았다** | 두 라운드에 P1 5개. 「도달 가능」과 「머지됐다」를 로컬 git 상태로 가르는 것이 안 된다 |
+| **다른 검사를 위태롭게 했다** | 판정에 `git fetch`가 필요한데 시간 제한이 없다. origin이 안 닿으면 훅이 20초 timeout에 걸려 죽고 **규칙 9와 실행비트 검사가 아예 안 돈다** |
+| **사용자 상태를 오염시켰다** | 그 fetch가 `FETCH_HEAD`를 덮어써서, 사용자의 `git merge FETCH_HEAD`가 엉뚱한 것을 머지한다 |
+
+**막는 대상이 되돌릴 수 있는 것이었다.** 머지된 브랜치에 얹은 커밋은 로컬이고, push해도 브랜치를 지우면 정리된다. 위 기준을 그대로 적용하면 처음부터 훅 대상이 아니었다.
+
+규칙 자체는 살아 있다 — [RULES.md](RULES.md) 규칙 1에 글로 있다.
+
 
 ### 주입량 (0.5.0)
 
@@ -204,12 +221,14 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                훅 시험 127개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 357개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
   harness-design/                 Phase 3 (+ references: 패턴 6종, 에이전트 템플릿)
   build/ tdd-java/                Phase 4
   inspect/ pr/ retro/ wrap/       Phase 5~8 (pr references: 봇 리뷰 대응, 위키 반영)
+    pr/scripts/merge-cleanup.sh   머지 + 브랜치 정리 — 문서가 아니라 스크립트다
+    inspect/scripts/…             브랜치·커밋 판정 — 같은 이유로 스크립트다
 templates/                        CLAUDE.md 2층·3층 골격
 ```

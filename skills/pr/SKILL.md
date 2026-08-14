@@ -26,20 +26,31 @@ description: 전수 검사가 전부 PASS한 뒤 PR을 올리고 봇 리뷰에 �
 줄 수가 많아 불안하면 그건 **기능이 하나가 맞는지** 다시 볼 신호이지,
 쪼갤 신호가 아니다. 실제로 둘 이상이면 다음 세션으로 미룬다.
 
-## 1. 커밋 정리
+## 1. 커밋 정리 — 여기서는 확인만 한다
 
 `inspect`에서 커밋 단위가 PASS했으면 건드리지 않는다.
 
-정리가 필요하면 지금 한다. 다만 **커밋을 만들 때부터 단일 목적**이어야 한다 —
-나중에 재구성하면 "커밋 시점에 테스트가 통과했다"는 보장이 깨진다.
+**정리가 남아 있으면 Phase 5로 돌아간다.** 여기서 고쳐 쓰면 이미 검사를
+통과한 이력이 검사 없이 바뀐다. 접는 자리는 Phase 5 한 곳이다(규칙 2).
 
 ## 2. PR 생성
 
 통합 브랜치 이름을 박아두지 않는다. 저장소마다 다르다(`develop`인 곳도 `main`인 곳도 있다).
 
 ```bash
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-git push -u origin feature/{이름}
+# Phase 5 가 검사한 값을 그대로 쓴다. origin/HEAD 는 기본값일 뿐이고,
+# 프로젝트 CLAUDE.md 가 develop·release 를 통합 브랜치로 정했으면 다르다.
+BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치
+[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+
+# push 대상을 **여기서 한 번 정하고** 생성·정리가 같은 것을 쓴다.
+# 생성은 origin 에 박고 정리는 pushDefault 를 따르면 서로 다른 저장소를 가리켜,
+# 정작 PR 의 head 브랜치가 안 지워진다.
+BR=$(git rev-parse --abbrev-ref HEAD)
+REMOTE=$(git config "branch.$BR.pushRemote" || git config remote.pushDefault \
+  || git config "branch.$BR.remote" || echo origin)
+
+git push -u "$REMOTE" "$BR"
 gh pr create --base "$BASE" --title "{타입}: {한 줄}" --body-file _workspace/pr-body.md
 ```
 
@@ -119,10 +130,12 @@ gh api "repos/<owner>/<repo>/pulls/<N>/comments"  --jq '[.[].user.login] | uniqu
 | 봇 | 언제 도나 |
 |---|---|
 | **codex** | PR 생성 · draft→ready · `@codex review` 코멘트. **push로는 안 돈다** |
-| **claudecode** | **push마다 돈다** |
+| **claudecode** | PR 생성 · draft→ready · reopen. **이 저장소는 push로 안 돈다** — 워크플로 트리거에 `synchronize`가 없다 |
 
-**같은 브랜치에 push하면 codex 리뷰는 아예 못 받고 claudecode만 한 번 더 돈다** —
-리뷰 총량은 그대로인데 **검사 축만 줄어든다.**
+**같은 브랜치에 push하면 둘 다 새로 안 돈다.** codex는 push를 트리거로 안 쓰고,
+claudecode 워크플로는 `synchronize`를 트리거에서 빼 뒀다
+([`.github/workflows/claude-code-review.yml`](../../.github/workflows/claude-code-review.yml)).
+**두 리뷰가 옛 커밋에 그대로 머물고, 고친 코드는 아무도 안 본다.**
 
 실측(2026-08-09, PR #42): push 뒤 codex는 앞 커밋에 머물렀고, claudecode는
 **5턴·$0.15로 돌고 아무것도 안 남겼다**(첫 실행은 29턴·$12.25).
@@ -139,7 +152,8 @@ gh api "repos/<owner>/<repo>/pulls/<N>/comments"  --jq '[.[].user.login] | uniqu
 리뷰가 안 왔으면 **머지하지 말고 워크플로부터 고친다.**
 `show_full_output` 류의 진단이 필요할 수 있고, **워크플로를 고치는 PR은
 자기 자신을 검증하지 못한다**(액션이 기본 브랜치와 내용이 다르면 실행을 거부한다).
-머지한 뒤 다른 PR에 push해서 확인한다.
+머지한 뒤 **새 PR을 열어** 확인한다 — 이 워크플로는 `synchronize`를 안 받으므로
+push로는 안 돈다. draft를 ready로 바꾸거나 닫힌 PR을 reopen해도 트리거된다.
 
 → [`references/bot-review.md`](references/bot-review.md) — 봇 리뷰 대응 규칙
 (**브랜치 동결과 스택 PR**·심각도 판정·수용 판단·답글 금지·머지 뒤 지적)
@@ -157,11 +171,95 @@ gh api "repos/<owner>/<repo>/pulls/<N>/comments"  --jq '[.[].user.login] | uniqu
 **라운드가 여럿이면 마지막 PR 하나만 머지한다.** 브랜치가 앞의 것 위에 쌓여 있어
 그 안에 전부 들어 있다. 앞 PR들은 이미 닫혀 있어야 한다.
 
-### 🔴 기능 PR은 스쿼시하지 않는다 — 머지 커밋으로 한다
+### 🔴 접힌 이력인지 먼저 확인한다 (접기 자체는 Phase 5에서 끝난다)
+
+**남길 단위는 하위 기능 하나당 커밋 하나다**(규칙 2). 기능과 그것을 검증하는
+테스트가 **같은 커밋**에 들어간다 — 갈라면 `inspect`의 TDD 검사가 구현만 있는
+커밋을 TDD 안 한 증거로 본다. 작업 중에는 TDD 사이클마다 커밋하고,
+**올리기 전에 그 모양으로 접는다.**
+
+**접는 자리는 Phase 5다.** `inspect` 2번이 커밋 수와 하위 기능 수를 비교해
+FAIL을 내고, 그 자리에서 접는다 — 여기(Phase 6)에 오면 이미 접혀 있어야 한다.
+PR을 올린 뒤에는 못 접으므로(아래 참고) Phase 5가 마지막 기회다.
 
 ```bash
-gh pr merge <N> --merge      # 스쿼시(--squash) 아님
+BASE=          # ← 프로젝트 CLAUDE.md 가 정한 통합 브랜치(블록마다 다시 정한다)
+[ -n "$BASE" ] || BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
+"${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.sh" "$BASE" --phase6 <PR번호>
 ```
+
+**`--phase6 <PR번호>` 를 넘긴다.** 안 넘기면 지금 열린 이 PR 이 「이 브랜치로
+이미 PR 이 열렸다」로 잡힌다. 반대로 Phase 5 에서는 넘기지 않는다 — 그때
+열린 PR 이 있다면 그것은 **얼린 PR 에 커밋을 얹으려는 것**이라 막아야 한다.
+
+**여기서도 스크립트를 부른다.** `git log "$BASE"..HEAD` 를 코드 블록에 두면
+`BASE` 가 없어 `HEAD..HEAD` 로 읽히고 **커밋을 하나도 안 보여준다.**
+
+**여기서 `rebase`를 돌리지 마라.** 이 자리는 PR을 올리고 봇 리뷰를 받은 뒤다 —
+고쳐 쓰면 리뷰가 붙은 SHA가 사라진다. force push해도 워크플로에 `synchronize`가
+없어 **리뷰는 옛 커밋에 남고**, push를 안 하면 원격 PR이 접히지 않은 채 머지된다.
+
+**접혀 있지 않으면 Phase 5로 돌아간다.** 아직 push 전이면 거기서 접고,
+이미 올렸으면 새 브랜치를 쌓아 접은 이력으로 새 PR을 연다(브랜치 동결).
+
+**접을 것과 남길 것.**
+
+| | 무엇 |
+|---|---|
+| **접는다** | 서로 상쇄하는 커밋(진단 켜기/끄기) · 같은 자리를 여러 번 고친 것 · 헛통과를 막는 test 커밋 |
+| **남긴다** | 하위 기능 경계. 커밋 하나에 구현과 테스트가 함께 |
+
+`rebase -i`에서 `squash`는 메시지를 합치고 `fixup`은 앞 커밋 메시지를 그대로
+쓴다. **왕복 커밋은 `fixup`이다** — 그 메시지는 이력에 남을 가치가 없다.
+
+접은 뒤 **테스트를 다시 돌린다.** 접힌 커밋은 한 번도 그 조합으로 돌아본 적이
+없다. `inspect` 2번을 접기 **뒤에** 하는 이유가 이것이다.
+
+> **이미 push한 뒤에는 접지 않는다.** force push는 봇 리뷰가 가리키는 커밋을
+> 없애 리뷰가 통째로 떠 버린다. 접는 자리는 **첫 push 전** 한 번이다.
+> 봇 지적을 받아 고칠 때는 새 브랜치를 쌓고(브랜치 동결), 그 브랜치에서
+> 다시 접어 올린다.
+
+**진행 기록이 태스크를 커밋 해시로 가리키면 접을 때 그 해시가 죽는다.**
+`_workspace`의 진행 기록은 **커밋 제목**으로 가리킨다 — 아래 스쿼시 절이
+같은 이유로 요구하는 것과 같다. 해시가 이미 적혀 있으면 접은 뒤 갱신한다.
+
+### 🔴 머지와 정리는 스크립트로 한다
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/pr/scripts/merge-cleanup.sh" <PR번호>
+```
+
+**`${CLAUDE_PLUGIN_ROOT}` 를 붙인다.** 설치본으로 쓰면 작업 폴더는 대상
+프로젝트이지 이 플러그인이 아니다 — 상대 경로로 부르면 없는 파일이 된다.
+훅이 `run-hook.cmd` 를 그렇게 부르는 것과 같은 이유다.
+
+**base 는 안 넘긴다.** 스크립트가 PR 에서 직접 읽는다.
+
+**손으로 치지 않는다.** 이 절차를 문서 안 코드 블록으로 두었다가 같은 실수를
+네 번 냈다 — 블록마다 새 셸이라 앞에서 정한 변수가 없었고, 문서라서 한 번도
+안 돌려봤다. 스크립트는 `hooks/tests/cleanup.sh`가 **43갈래를 실제로 잰다.**
+
+스크립트가 하는 일:
+
+| | |
+|---|---|
+| 머지 | `--merge`(스쿼시 아님). **`--delete-branch`는 넘기지 않는다** — 삭제는 아래의 검증된 절차가 한다. 큐에 들어가면 끝나기를 기다린다 |
+| 시한 | 요청마다 30초, 큐 대기는 20분. `gh`·`git` 둘 다 타임아웃 옵션이 없고 macOS에는 `timeout(1)`이 없어 직접 잰다 |
+| 대조 | **PR 의 head 가 지금 브랜치와 같은지 먼저 본다.** 번호를 잘못 넣으면 상관없는 브랜치를 원격까지 지운다 |
+| 고정 | `--match-head-commit` 으로 **리뷰가 붙은 커밋**에 묶는다. 리뷰 뒤 누가 push 했으면 거부한다 — 이 워크플로에는 `synchronize` 가 없어 그 커밋은 리뷰를 못 받는다 |
+| 봇 확인 | 봇 둘이 **각각** 현재 head 를 봤는지 본다. 로그인을 **정확히** 대조한다 — `contains("claude")` 로 보면 `claude-review-helper` 같은 아무 계정이 통과한다 |
+| SHA 없는 증거 | codex 가 👍 만, claude 가 코멘트만 남기는 경우가 있다(PR #33). 그것이 **현재 head** 를 본 것인지 기계가 알 수 없으므로 **자동으로 통과시키지 않고 멈춘다.** 눈으로 확인한 뒤 `CLEANUP_ALLOW_SHALESS=1` 로 다시 부른다. 반응은 `+1` 만 본다 — `eyes` 는 검토 시작 신호다 |
+| 확인 | 명령이 성공해도 **상태를 직접 본다.** 큐에 넣기만 했거나 auto-merge 를 켜 둔 것일 수 있다 |
+| 정리 | PR 의 base 로 옮긴 **뒤** 원격·로컬 브랜치를 지운다. head 를 올린 원격은 머지 **전에** 잡아둔다 |
+| 전략 | 저장소가 merge commit 을 끄면 `--squash`·`--rebase` 로 떨어진다. `--merge` 만 두 번 시도하면 Phase 6 이 통째로 막힌다 |
+| 삭제 | 원격**과 로컬**이 둘 다 리뷰된 커밋을 가리킬 때만 지운다. 큐를 기다리는 20분 사이에 원격에 push 가 오거나 다른 터미널이 로컬에 커밋을 얹으면 그것은 이 PR 에 없던 것이다 |
+| 호스트 | push URL 의 **호스트까지** 대조한다. `owner/repo` 만 맞추면 github.com 과 사내 미러가 같아 보여 다른 서버의 동명 브랜치를 지운다 |
+| 멈추는 곳 | head 불일치 · 조회 실패 · 큐에 못 넣음 · 머지가 안 끝남 · 브랜치 이동 실패 · 원격이 다른 커밋을 가리킴 · base 원격 없음. **그때는 아무것도 안 지운다** |
+
+원격 브랜치가 **이미 없으면 성공으로 친다** — 머지 후 head를 자동 삭제하는
+설정이 흔하다. 다만 `ls-remote`가 인증·전송 문제로 실패한 것과는 구분한다
+(`--exit-code`의 2만 「없음」이다).
 
 **스쿼시는 커밋 전부를 한 줄로 접는다.** 그러면 두 가지가 같이 사라진다.
 
@@ -180,13 +278,15 @@ gh pr merge <N> --merge      # 스쿼시(--squash) 아님
 
 **문서 저장소(위키)는 스쿼시가 맞다.** 거기는 커밋 단위가 판정 대상이 아니다.
 
-머지 후 로컬 정리:
+**머지 뒤에 손으로 더 할 것이 없다.** `merge-cleanup.sh` 가 통합 브랜치로 옮기고,
+검증한 원격에서 갱신하고, 원격·로컬 브랜치와 그 설정까지 지운다.
 
-```bash
-BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's|^origin/||')
-git switch "$BASE" && git pull
-git branch -d feature/{이름}
-```
+예전에는 여기에 수동 정리 블록이 있었는데 **걷어냈다**(2026-08-13, codex).
+그 블록은 원격을 새로 구했는데, 그 시점에는 이미 통합 브랜치에 서 있어서
+**head 가 아니라 base 의 설정**이 잡힌다. fork 처럼 둘이 다른 구성에서는
+스크립트가 검증한 upstream 대신 fork 의 base 를 당겨 로컬을 오염시킨다.
+
+정리가 중간에 멈췄으면 스크립트가 그 이유를 찍고 종료한다. 그때만 손으로 본다.
 
 ## 6. 지식 위키 반영
 
