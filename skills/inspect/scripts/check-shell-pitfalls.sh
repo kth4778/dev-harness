@@ -49,8 +49,21 @@ for root in "${roots[@]}"; do
                 case "$first" in '#!'*sh*) : ;; *) continue ;; esac ;;
         esac
 
-        # 주석 줄을 제외하고 파이프 뒤 grep -q 를 찾는다.
-        hits=$(grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$f" 2>/dev/null \
+        # **논리 줄로 결합해** 찾는다. 줄 단위로만 보면 백슬래시 연속이나
+        # 줄 끝 `|` 뒤 다음 줄의 grep -q (trailing-pipe) 를 놓친다 — 정확히
+        # 같은 SIGPIPE 함정인데 PASS 였다 (codex·claude, PR #86).
+        # q 는 결합 플래그의 어느 자리에나 올 수 있고(-qE·-Eq), 긴 이름
+        # (--quiet·--silent)도 있다.
+        hits=$(awk '
+            {
+                if (buf == "") { start = NR; buf = $0 } else { buf = buf " " $0 }
+                if (buf ~ /\\$/)              { sub(/\\$/, " ", buf); next }
+                if (buf ~ /\|[[:space:]]*$/)   next
+                print start ":" buf; buf = ""
+            }
+            END { if (buf != "") print start ":" buf }
+        ' "$f" 2>/dev/null \
+                 | grep -E '\|[[:space:]]*grep[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*([[:space:]]|$)|--quiet|--silent)' \
                  | grep -vE '^[0-9]+:[[:space:]]*#' || true)
         if [ -n "$hits" ]; then
             printf 'FAIL — 파이프 뒤 grep -q: %s\n' "$f" >&2

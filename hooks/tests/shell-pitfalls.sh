@@ -40,6 +40,23 @@ printf 'x | grep -q y\n' > "$T/a/tests/fixture.sh"
 rm -f "$T/a/bad.sh"
 r 0 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" 'tests/ 폴더는 검사하지 않는다'
 
+echo "── PR #86 지적 — 놓치던 세 형태 ──"
+printf '#!/usr/bin/env bash\ncmd | grep -qE pat || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" 'q 가 앞에 오는 결합(-qE)도 잡는다'
+
+printf '#!/usr/bin/env bash\ncmd | grep --quiet pat && x=1\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '--quiet 긴 이름도 잡는다'
+
+printf '#!/usr/bin/env bash\ncmd | \\\n    grep -Eq pat || exit 0\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '백슬래시 연속 뒤의 grep -q 도 잡는다'
+
+printf '#!/usr/bin/env bash\ncmd |\n    grep -q pat || exit 0\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '줄 끝 파이프(trailing) 뒤도 잡는다'
+
+# 결합이 오탐을 만들면 안 된다 — 여러 줄 grep -c 는 정당하다.
+printf '#!/usr/bin/env bash\nn=$(cmd | \\\n    grep -c pat || true)\n' > "$T/a/bad.sh"
+r 0 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '여러 줄 grep -c 는 통과한다'
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.
