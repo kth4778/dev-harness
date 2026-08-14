@@ -72,6 +72,12 @@ r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '인용된 예시는 
 printf '#!/usr/bin/env bash\ncmd | grep -q "pat" || exit 1\n' > "$T/a/bad.sh"
 r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '패턴이 인용돼 있어도 잡는다'
 
+echo "── PR #89 지적 ──"
+# ${dir#./} 의 # 가 주석으로 읽히면 그 뒤 파이프가 사라진 채 통과한다.
+printf '#!/usr/bin/env bash\ncat ${dir#./}/f | grep -q needle || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '파라미터 확장의 # 뒤 파이프도 잡는다'
+rm -f "$T/a/bad.sh"
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.

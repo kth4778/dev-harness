@@ -528,6 +528,28 @@ mkdir -p src; printf 'class READMEParser {}\n' > src/READMEParser.java
 git add .; git commit -qm "feat: 파서를 넣는다"
 r 1 "$(out_of >/dev/null 2>&1; echo $?)" 'READMEParser.java 는 소스로 본다'
 
+echo "── PR #89 지적 ──"
+# 바이너리 파일을 건드린 커밋에서 blob 디코딩으로 죽으면 안 된다.
+# 인라인 테스트 검사가 파일 내용을 읽는 경로를 태우려면 테스트 없는 커밋이어야 한다.
+fresh
+mkdir -p src; printf 'ok\n' > src/base.py
+git add .; git commit -qm "base"; git push -q origin main 2>/dev/null
+git switch -qc feature/binary
+printf '\xff\xfe\x00\x01BINARY' > src/blob.bin
+git add .; git commit -qm "feat: 바이너리를 넣는다"
+out=$(out_of 2>&1); rc=$?
+r 1 "$rc" '바이너리 커밋도 죽지 않고 판정한다(구현만 → FAIL)'
+printf '%s' "$out" | grep -q "Traceback" && r n y '트레이스백이 없다' || r n n '트레이스백이 없다'
+
+# 직접 실행되는 스크립트는 실행 비트가 인덱스에 있어야 한다 — 체크아웃에서
+# Permission denied 로 Phase 5·6 이 아예 못 돈다.
+for f in skills/inspect/scripts/check-branch-commits.py \
+         skills/pr/scripts/merge-cleanup.py \
+         skills/inspect/scripts/check-shell-pitfalls.py; do
+    mode=$(cd "$ROOT" && git ls-files -s "$f" | awk '{print $1}')
+    r "100755" "${mode:-없음}" "$f 가 실행 가능으로 커밋됐다"
+done
+
 echo
 echo "════ 합계: OK $pass / FAIL $fail ════"
 [ "$fail" -eq 0 ]

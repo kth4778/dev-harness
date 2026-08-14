@@ -49,7 +49,12 @@ def run(args, timeout=None):
     import signal
     try:
         p = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            # errors="replace" — 이 헬퍼로 커밋의 **blob 자체**를 읽는 자리가
+            # 있다(인라인 테스트 검사). 바이너리(이미지·jar)를 strict 로 읽으면
+            # UnicodeDecodeError 로 Phase 5 가 트레이스백과 함께 죽는다 — sh 판의
+            # grep 은 안 죽었으니 이식 회귀였다 (codex·claude, PR #89).
+            args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, errors="replace",
             start_new_session=timeout is not None,
         )
     except FileNotFoundError:

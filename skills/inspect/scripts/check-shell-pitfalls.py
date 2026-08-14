@@ -102,6 +102,11 @@ def scan_line(line):
     """
     lex = shlex.shlex(line, posix=True, punctuation_chars="|;&()")
     lex.whitespace_split = True
+    # `#` 주석 처리를 끈다. 켜 두면 `${dir#./}` 같은 파라미터 확장의 # 에서
+    # 줄이 잘려 그 뒤의 `| grep -q` 가 **사라진 채 통과**한다 (codex, PR #89).
+    # 줄 전체 주석은 위에서 이미 걸렀고, 줄 끝 주석 속 파이프가 오탐될 수는
+    # 있지만 — 거짓 차단은 사람이 보고, 거짓 통과는 이력에 남는다.
+    lex.commenters = ""
     try:
         tokens = list(lex)
     except ValueError:
