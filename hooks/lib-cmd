@@ -57,8 +57,9 @@ flatten_command() {
 # **거짓 통과는 히스토리에 남고, 거짓 차단은 사람이 그 자리에서 안다.**
 # 무게가 다르면 정확도를 좇지 않는다. 오탐은 남기고 목록을 여기 적어 둔다.
 is_commit_command() {
-    printf '%s' "$1" | grep -Eq \
-        '(^|[;&|[:space:]`]|\$\()git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)'
+    [ "$(printf '%s' "$1" | grep -cE \
+        '(^|[;&|[:space:]`]|\$\()git([[:space:]]+(-[cC][[:space:]]+("[^"]+"|[^[:space:]]+)|--?[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)' \
+        || true)" -gt 0 ]
 }
 
 # 명령이 밝힌 대상 저장소 경로. 안 밝혔으면 빈 출력.

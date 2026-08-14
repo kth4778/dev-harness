@@ -50,6 +50,18 @@ git diff --name-only "$(cat .harness/stamp)"..HEAD -- '*/src/main/*' 'src/main/*
 git rev-parse HEAD > .harness/stamp
 ```
 
+## 셸 함정 검사 (스크립트를 만졌을 때)
+
+이번 변경이 셸 스크립트를 만졌으면 돌린다:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-shell-pitfalls.sh"
+```
+
+「파이프 뒤 grep -q」를 기계로 잡는다 — 규칙(주석)이 있었는데도 한 세션에서
+열 번 밟았고, 도입 직후 운영 코드에서 2건을 더 찾았다. 못 잡는 것(`|| true`
+삼킴)은 스크립트 머리말에 적혀 있다 — 그건 리뷰가 본다.
+
 ## 10개 판정
 
 → [`references/checklist.md`](references/checklist.md) — 10개 판정 항목의 판정 기준 전문
