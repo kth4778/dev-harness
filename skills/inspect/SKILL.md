@@ -55,7 +55,10 @@ git rev-parse HEAD > .harness/stamp
 이번 변경이 셸 스크립트를 만졌으면 돌린다:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-shell-pitfalls.sh"
+# **대상 프로젝트 루트를 넘긴다.** 인자가 없으면 기본값이 플러그인 자신이라,
+# 설치본에서는 정작 검사하려는 프로젝트를 안 본다 (codex, PR #87).
+bash "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-shell-pitfalls.sh" \
+    "$(git rev-parse --show-toplevel)"
 ```
 
 「파이프 뒤 grep -q」를 기계로 잡는다 — 규칙(주석)이 있었는데도 한 세션에서

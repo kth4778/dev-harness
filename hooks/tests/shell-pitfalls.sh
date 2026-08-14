@@ -3,7 +3,9 @@
 # 「그 결함에서 실패한 적 없는 시험은 시험이 아니다」).
 set -uo pipefail
 
-H="$(cd "$(dirname "$0")/.." && pwd)"
+# run-all 이 넘기는 대체 훅 폴더를 받는다 — 다른 시험들과 같은 규약이다.
+# 무시하면 「고치기 전후 비교」가 이 시험에서만 늘 현재 체크아웃을 잰다.
+H="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT="$H/../skills/inspect/scripts/check-shell-pitfalls.sh"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
@@ -56,6 +58,19 @@ r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '줄 끝 파이프(trail
 # 결합이 오탐을 만들면 안 된다 — 여러 줄 grep -c 는 정당하다.
 printf '#!/usr/bin/env bash\nn=$(cmd | \\\n    grep -c pat || true)\n' > "$T/a/bad.sh"
 r 0 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '여러 줄 grep -c 는 통과한다'
+
+echo "── PR #87 지적 ──"
+# quiet 가 다른 옵션 뒤에 와도 잡는다.
+printf '#!/usr/bin/env bash\ncmd | grep -E --quiet pat || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '-E --quiet 순서도 잡는다'
+
+# 인용된 예시 문자열은 실행 코드가 아니다 — 거짓 차단이 났던 형태.
+printf "#!/usr/bin/env bash\nprintf '%%s' 'example: cmd | grep -q pat'\n" > "$T/a/bad.sh"
+r 0 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '인용된 예시는 오인하지 않는다'
+
+# 인용을 지워도 진짜 함정은 남는다 — 패턴 인자가 인용돼 있어도 잡는다.
+printf '#!/usr/bin/env bash\ncmd | grep -q "pat" || exit 1\n' > "$T/a/bad.sh"
+r 1 "$(bash "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '패턴이 인용돼 있어도 잡는다'
 
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에

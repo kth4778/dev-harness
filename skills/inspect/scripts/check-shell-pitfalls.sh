@@ -35,7 +35,10 @@ fail=0
 for root in "${roots[@]}"; do
     while IFS= read -r f; do
         # 시험 폴더는 뺀다 — 의도적으로 함정을 담아 두는 자리다.
-        case "$f" in */tests/*) continue ;; esac
+        # 대상 프로젝트 루트를 통째로 받을 수 있으므로 남의 코드 무더기도 뺀다.
+        case "$f" in
+            */tests/*|*/.git/*|*/node_modules/*|*/vendor/*|*/build/*|*/.gradle/*) continue ;;
+        esac
         # 자기 자신도 뺀다 — 패턴 문자열이 문서로 들어 있다.
         [ "$(basename "$f")" = "check-shell-pitfalls.sh" ] && continue
 
@@ -53,7 +56,11 @@ for root in "${roots[@]}"; do
         # 줄 끝 `|` 뒤 다음 줄의 grep -q (trailing-pipe) 를 놓친다 — 정확히
         # 같은 SIGPIPE 함정인데 PASS 였다 (codex·claude, PR #86).
         # q 는 결합 플래그의 어느 자리에나 올 수 있고(-qE·-Eq), 긴 이름
-        # (--quiet·--silent)도 있다.
+        # (--quiet·--silent)도 있으며, **다른 옵션 뒤**(-E --quiet)에도 온다.
+        # 매치 전에 **인용 구간을 지운다** — printf 가 찍는 예시 문자열
+        # ('cmd | grep -q pat')을 실행 코드로 오인해 거짓 차단이 났다
+        # (codex, PR #87). 플래그는 인용 밖에 있고 예시는 안에 있다 —
+        # pr-guard 의 필드 플래그 검사와 같은 기법이다.
         hits=$(awk '
             {
                 if (buf == "") { start = NR; buf = $0 } else { buf = buf " " $0 }
@@ -63,7 +70,8 @@ for root in "${roots[@]}"; do
             }
             END { if (buf != "") print start ":" buf }
         ' "$f" 2>/dev/null \
-                 | grep -E '\|[[:space:]]*grep[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*([[:space:]]|$)|--quiet|--silent)' \
+                 | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g" \
+                 | grep -E '\|[[:space:]]*grep([[:space:]]+-[A-Za-z-]+)*[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*([[:space:]]|$)|--quiet|--silent)' \
                  | grep -vE '^[0-9]+:[[:space:]]*#' || true)
         if [ -n "$hits" ]; then
             printf 'FAIL — 파이프 뒤 grep -q: %s\n' "$f" >&2
