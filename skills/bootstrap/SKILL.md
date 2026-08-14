@@ -25,7 +25,7 @@ description: Use when starting any conversation - establishes the development wo
 | 2 | 계획 | `plan` | 사용자가 계획을 수락 |
 | 3 | 하네스 설계 | `harness-design` | 사용자가 팀 구성을 승인 |
 | 4 | 개발 | `build` · `tdd-java` | 모든 태스크 완료 |
-| 5 | 전수 검사 + **README 동기화** | `inspect` | 절대 규칙 10개 **전부** PASS |
+| 5 | 전수 검사 + **README 동기화** | `inspect` | 절대 규칙 10개 + 승격 규칙 **전부** PASS |
 | 6 | PR | `pr` | 봇 2개 리뷰 통과 후 머지 |
 | 7 | 회고 | `retro` | 승격 제안에 대한 사용자 판단 |
 | 8 | 세션 마감 + **CLAUDE.md 최신화** | `wrap` | [3] 자리가 비었는지 확인 |
