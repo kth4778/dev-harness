@@ -118,6 +118,17 @@ rm -f "$T/a/check-shell-pitfalls.legacy.sh"
 n=$(grep -c 'reconfigure' "$SCRIPT" || true)
 r 1 "$([ "$n" -ge 1 ] && echo 1 || echo 0)" 'CP949 대비 스트림 reconfigure 가 있다'
 
+echo "── PR #94 지적 ──"
+# 큰따옴표 안 명령 치환의 파이프는 셸이 실제로 실행하는 진짜 파이프다 —
+# 인용 리터럴로 삼키면 거짓 통과다(직전 커밋의 스캐너 교체가 만든 회귀).
+printf '#!/usr/bin/env bash\nout="found: $(cmd | grep -q pat && echo y)"\n' > "$T/a/bad.sh"
+r 1 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" '큰따옴표 안 $(… | grep -q …) 를 잡는다'
+
+# 통과 쌍(승격 규칙 ⑤) — 작은따옴표 안 $() 는 셸에서도 리터럴이다.
+printf "#!/usr/bin/env bash\nmsg='ex: \$(cmd | grep -q pat)'\nprintf %%s \"\$msg\"\n" > "$T/a/bad.sh"
+r 0 "$(python3 "$SCRIPT" "$T/a" >/dev/null 2>&1; echo $?)" "작은따옴표 안 \$() 는 리터럴 — 오인하지 않는다"
+rm -f "$T/a/bad.sh"
+
 echo "── 실제 저장소 ──"
 # 출력을 버리지 않는다 — CI 에서 실패했을 때 어느 파일이 걸렸는지 로그에
 # 안 남아 진단이 안 됐다(2026-08-14 실물). 실패하면 그대로 보여준다.

@@ -28,6 +28,8 @@
   - `cmd || true` 로 명령 실패를 삼키고 그 결과로 판정하는 것. `grep -c
     || true` 같은 정당한 사용과 기계로 가를 수 없다 — 리뷰가 본다
   - 파이프 중간의 `head`. 실사고 이력이 없어 범위 밖에 뒀다
+  - 백틱 명령 치환(`` `cmd` ``) 안의 파이프. 큰따옴표 안 `$()` 는 잡지만
+    (PR #94) 백틱은 이 저장소에서 쓰지 않아 범위 밖에 뒀다
 
 사용: check-shell-pitfalls.py [검사할 루트...]
   인자가 없으면 플러그인의 hooks/ 와 skills/*/scripts/ 를 본다.
@@ -130,12 +132,43 @@ def tokenize(line):
     while i < n:
         c = line[i]
         if quote:
-            word.append(c)
-            if quote == '"' and c == "\\" and i + 1 < n:
-                i += 1
-                word.append(line[i])  # \" 가 닫는 따옴표로 읽히지 않게
-            elif c == quote:
-                quote = None
+            if quote == '"' and c == "$" and i + 1 < n and line[i + 1] == "(":
+                # 큰따옴표 안 명령 치환 — 셸은 이 안을 실제로 실행하므로
+                # 리터럴로 삼키면 안의 파이프가 거짓 통과한다 (claude, PR #94).
+                # 짝 맞는 ) 까지 거둬 재귀로 토큰화하고, 경계 토큰 ( ) 사이에
+                # 끼워 흘린다 — scan_line 이 안의 파이프를 그대로 본다.
+                j, depth, inner_q = i + 1, 0, None
+                while j < n:
+                    d = line[j]
+                    if inner_q:
+                        if d == "\\":
+                            j += 1
+                        elif d == inner_q:
+                            inner_q = None
+                    elif d in "'\"":
+                        inner_q = d
+                    elif d == "(":
+                        depth += 1
+                    elif d == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                if word:
+                    tokens.append("".join(word))
+                    word = []
+                tokens.append("(")
+                tokens.extend(tokenize(line[i + 2:j]))
+                tokens.append(")")
+                i = j  # 짝을 못 찾으면 n — 줄 끝까지 거둔 것이다
+                # 바깥 큰따옴표는 계속 열려 있다 — 닫는 " 를 계속 기다린다
+            else:
+                word.append(c)
+                if quote == '"' and c == "\\" and i + 1 < n:
+                    i += 1
+                    word.append(line[i])  # \" 가 닫는 따옴표로 읽히지 않게
+                elif c == quote:
+                    quote = None
         elif c == "\\":
             word.append(c)
             if i + 1 < n:
