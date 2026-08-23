@@ -15,10 +15,10 @@ H="${1:-$(cd "$here/.." && pwd)}"
 # all(디스패처)도 목록에 넣는다. 빼 두면 그 결과가 총계에 안 잡혀
 # 디스패처가 깨져도 suite 가 통과한다 (codex, PR #24).
 total_ok=0; total_fail=0
-for t in guards codex mode p2 pr-guard cleanup inspect-checks shell-pitfalls all; do
+for t in guards codex mode p2 pr-guard cleanup inspect-checks shell-pitfalls panel-tally all; do
     printf '\n════════ %s ════════\n' "$t"
     # cleanup 만 저장소 루트를 받는다 — 훅이 아니라 skills/ 의 스크립트를 잰다
-    if [ "$t" = cleanup ] || [ "$t" = inspect-checks ]; then arg=$(cd "$H/.." && pwd); else arg="$H"; fi
+    if [ "$t" = cleanup ] || [ "$t" = inspect-checks ] || [ "$t" = panel-tally ]; then arg=$(cd "$H/.." && pwd); else arg="$H"; fi
     out=$(bash "$here/$t.sh" "$arg" 2>&1); st=$?
     printf '%s\n' "$out"
     ok=$(printf '%s' "$out"   | grep -c '\[OK ')
