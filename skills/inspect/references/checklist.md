@@ -6,7 +6,7 @@
 "${CLAUDE_PLUGIN_ROOT}/skills/inspect/scripts/check-branch-commits.py" [통합브랜치]
 ```
 
-Phase 6 에서 다시 부를 때만 `--phase6 <PR번호>` 를 붙인다 — 그 PR 하나를
+Phase 7 에서 다시 부를 때만 `--phase6 <PR번호>` 를 붙인다(**플래그 이름은 `phase6` 그대로다** — 리뷰 루프가 Phase 6 으로 들어오면서 PR 이 7 이 됐지만, 스크립트가 파싱하는 문자열이라 안 바꿨다) — 그 PR 하나를
 재사용 검사에서 뺀다. **Phase 5 에서는 붙이지 않는다.** 그때 열린 PR 이 있다면
 얼린 PR 에 커밋을 얹으려는 것이므로 막아야 한다.
 
@@ -133,7 +133,7 @@ git diff --name-only "$BASE"..HEAD | grep -E '(^|/)README\.md$'
 | 브랜치 전략·스택·모듈 인덱스 | 2층 `<repo>/CLAUDE.md` |
 | 하네스 변경 이력 | 2층 변경 이력 표 |
 
-상위 층에 상세를 몰아쓰지 않았나. **마무리는 Phase 8(`wrap`)에서 한다** —
+상위 층에 상세를 몰아쓰지 않았나. **마무리는 Phase 9(`wrap`)에서 한다** —
 여기서는 빠진 것이 있는지만 본다.
 
 #### 6-3. 고친 결함이 "알려진 구멍" 목록에 남아 있지 않나
