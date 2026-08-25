@@ -14,9 +14,10 @@
 | 3 | 하네스 설계 — 이 기능에 맞는 에이전트 팀 | `harness-design` | 사용자 승인 |
 | 4 | 개발 — TDD, 태스크마다 리뷰 | `build` · `tdd-java` | 모든 태스크 완료 |
 | 5 | 전수 검사 — 규칙 10개 + **왕복 이력 접기** + 서버 실제 기동 + **README 동기화** | `inspect` | **전부 PASS** |
-| 6 | PR — 봇 2개 리뷰 + **지식 위키 반영** | `pr` | 머지 |
-| 7 | 회고 — 실수를 규칙으로 승격 | `retro` | 사용자 판단 |
-| 8 | 세션 마감 — 기록하고 **CLAUDE.md 최신화**하고 자리 비우기 | `wrap` | 자리 확인 |
+| 6 | **PR 전 로컬 리뷰 루프** — `/code-review` 반복으로 봇이 볼 것을 미리 잡기 | `review-loop` | 치명·중대 0 · 「재현 못 함」 0 |
+| 7 | PR — 봇 2개 리뷰 + **지식 위키 반영** | `pr` | 머지 |
+| 8 | 회고 — 실수를 규칙으로 승격 | `retro` | 사용자 판단 |
+| 9 | 세션 마감 — 기록하고 **CLAUDE.md 최신화**하고 자리 비우기 | `wrap` | 자리 확인 |
 
 절대 규칙 10개는 [RULES.md](RULES.md)에 있다.
 
@@ -38,7 +39,7 @@
 갈리거나, 결정 문서의 "반영 완료" 체크가 사실이 아닌 채로 남는다.
 
 `<git루트>/.harness/wiki` 한 줄이 그 저장소를 가리키고, **없으면 건너뛴다.**
-코드 PR을 머지한 뒤 Phase 6에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
+코드 PR을 머지한 뒤 Phase 7에서 **별도 PR**로 올린다. 규칙 6-3이 이것이다.
 
 **훑는 범위는 위키 전체, 고치는 범위는 내 담당 영역이다.** 위키는 컴파일도
 테스트도 안 되므로 틀린 서술에 아무 신호가 없다 — 그래서 매번 전수로 본다.
@@ -47,7 +48,7 @@
 ## 요구 사항
 
 - git · gh(GitHub CLI)
-- **python3 (3.9+)** — Phase 5 검사와 Phase 6 정리 스크립트가 파이썬이다
+- **python3 (3.9+)** — Phase 5 검사와 Phase 7 정리 스크립트가 파이썬이다
   (2026-08-14 이식). 없으면 그 두 단계가 돌지 않는다. macOS·리눅스에는 대개
   있고, Windows 는 python.org 판이나 `winget install python` 으로 설치한다
 
@@ -241,7 +242,8 @@ skills/
   harness-design/                 Phase 3 (+ references: 패턴 6종, 에이전트 템플릿)
   build/ tdd-java/                Phase 4
     build/scripts/panel-tally.py  감사 패널 집계 — 표는 모델이 아니라 코드가 센다
-  inspect/ pr/ retro/ wrap/       Phase 5~8 (pr references: 봇 리뷰 대응, 위키 반영)
+  inspect/ review-loop/ pr/       Phase 5~9 (pr references: 봇 리뷰 대응, 위키 반영)
+  retro/ wrap/
     pr/scripts/merge-cleanup.py   머지 + 브랜치 정리 — 문서가 아니라 스크립트다
     inspect/scripts/…             브랜치·커밋 판정 — 같은 이유로 스크립트다
 templates/                        CLAUDE.md 2층·3층 골격
