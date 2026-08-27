@@ -62,5 +62,44 @@ done
 # spec 은 첫 Phase 라 앞 단계가 없다. tdd-java 는 build 안에서 불린다.
 r 2 "$noref" "앞 단계를 안 적은 스킬은 둘뿐이다 (spec · tdd-java)"
 
+# ── 6. Phase N 의 「다음」이 Phase N+1 을 가리키나 ──────────────
+# 5번은 **가리키는 스킬이 실재하나**만 봤다. 그래서 `pr` 의 다음을 `sync` 가 아니라
+# `retro` 로 바꿔도 초록이었다 — 둘 다 실재하니까. 그러면 Phase 8 이 도달 불가인데
+# 시험은 통과한다(codex, PR #108). 사슬은 **순서**가 본체라 그것을 직접 잰다.
+wrong=0
+for f in "$S"/*/SKILL.md; do
+    # 🔴 grep -oE '[0-9]+$' 를 쓰지 마라. 매치가 ')' 로 끝나 숫자가 줄 끝이 아니고,
+    #    그러면 n 이 빈 채 continue 로 빠져 **이 갈래 전체가 아무것도 안 잰다**
+    #    (실측: 주입해도 초록. 「통과한다」와 「잰다」는 다르다).
+    n=$(grep -m1 -E '^# .*\(Phase [0-9]+\)' "$f" | sed -E 's/.*\(Phase ([0-9]+)\).*/\1/')
+    [ -n "$n" ] || continue
+    [ "$n" = "$last" ] && continue          # 마지막 Phase 는 다음이 없다
+    # 이 스킬이 tdd-java 처럼 Phase 를 공유하면 건너뛴다 — 사슬의 마디가 아니다.
+    owner=$(grep -l "^# .*(Phase $n)" "$S"/*/SKILL.md | head -1)
+    [ "$f" = "$owner" ] || continue
+    nxt=$((n + 1))
+    want=$(basename "$(dirname "$(grep -l "^# .*(Phase $nxt)" "$S"/*/SKILL.md | head -1)")")
+    got=$(sed -n '/^## 다음/,$p' "$f" | grep -ohE '`[a-z-]+` 스킬' | tr -d '`' | sed 's/ 스킬//' | head -1)
+    [ "$got" = "$want" ] || {
+        wrong=$((wrong+1))
+        echo "      Phase $n($(basename "$(dirname "$f")")) 의 다음이 '$got' 다 — Phase $nxt 는 '$want'"; }
+done
+r 0 "$wrong" "각 Phase 의 「다음」이 바로 다음 Phase 를 가리킨다"
+
+# ── 7. 아무 스킬도 안 가리키는 references 파일이 있나 ────────────
+# 스킬을 옮길 때 옛 자리의 참조 문서가 **지워지지 않고 남는다.** 이 판에서 실제로
+# 그랬다 — git mv 로 옮긴 뒤 커밋에 삭제 쪽을 안 담아, 옛 문서가 살아남아
+# 「retro 로 가라」는 **정반대**를 지시하고 있었다(claude·codex, PR #108).
+orphan=0
+for ref in "$S"/*/references/*.md; do
+    [ -e "$ref" ] || continue
+    name=$(basename "$ref")
+    owner=$(dirname "$(dirname "$ref")")
+    grep -rqF "references/$name" "$owner/SKILL.md" || {
+        orphan=$((orphan+1))
+        echo "      고아: ${ref#"$S/"} — 같은 스킬의 SKILL.md 가 안 가리킨다"; }
+done
+r 0 "$orphan" "references 문서를 그 스킬의 SKILL.md 가 전부 가리킨다"
+
 printf '\n════ 합계: OK %s / FAIL %s ════\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

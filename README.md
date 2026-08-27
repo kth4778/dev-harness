@@ -27,7 +27,7 @@
 | 문서 | 커밋 | Phase |
 |---|---|---|
 | `README.md` | **된다** | **5** — 코드와 같은 PR에 태운다 |
-| `CLAUDE.md` | 안 된다 (규칙 9) | 8 — 마감할 때 |
+| `CLAUDE.md` | 안 된다 (규칙 9) | **10** — 마감할 때 |
 
 머지된 뒤에 README를 고치면 **PR이 하나 더 든다.** `CLAUDE.md`만 최신인 상태는
 최신이 아니다 — 그 파일은 커밋되지 않아 팀원에게 도달하지 않는다.
@@ -236,7 +236,7 @@ CLAUDE.md
 RULES.md                          절대 규칙 10개 — 단일 원본
 hooks/                            8개 + 폴리글롯 디스패처 + 공용 lib 3개
                                   (lib-input 입력 · lib-cmd 명령 해석 · lib-repo 저장소)
-  tests/run-all.sh                시험 412개 — 고치기 전후로 돌려 숫자를 비교한다
+  tests/run-all.sh                시험 419개 — 고치기 전후로 돌려 숫자를 비교한다
 skills/
   bootstrap/                      훅이 세션마다 전문을 주입
   spec/ plan/                     Phase 1~2
